@@ -1,34 +1,56 @@
 Source: dtkgui
-Section: libdevel
+Section: libs
 Priority: optional
-Maintainer: Deepin Packages Builder <packages@deepin.com>
-Build-Depends: debhelper (>= 9), pkg-config, 
- qtbase5-private-dev, qtbase5-dev-tools,
- libdtkcore-dev, librsvg2-dev, libgtest-dev
-Standards-Version: 3.9.8
-
-Package: libdtkgui5
-Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}, libdtkcommon
-Multi-Arch: same
-Description: Deepin Tool Kit Gui library
- DtkGui is base library of Deepin Qt/C++ applications.
- .
- This package contains the shared libraries.
-
-Package: libdtkgui5-bin
-Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends},
- libdtkgui5( =${binary:Version})
-Description: Deepin Tool Kit Gui Utilities
- DtkGui is base devel library of Deepin Qt/C++ applications.
- .
- This package contains the utilities of DtkGui
+Maintainer: Debian Deepin Packaging Team <pkg-deepin-devel@lists.alioth.debian.org>
+Uploaders: Boyuan Yang <byang@debian.org>,
+           Arun Kumar Pariyar <openarungeek@gmail.com>,
+           Hu Feng <hufeng@uniontech.com>,
+           Clay Stan <claystan97@gmail.com>
+Build-Depends: debhelper-compat (= 13),
+               libdtkcore-dev (>= 5.4.10~),
+               libgtest-dev,
+               librsvg2-dev,
+               pkg-config,
+               qtbase5-dev-tools,
+               qtbase5-private-dev
+Rules-Requires-Root: no
+Standards-Version: 4.5.1
+Homepage: https://github.com/linuxdeepin/dtkgui
+Vcs-Git: https://salsa.debian.org/pkg-deepin-team/dtkgui.git
+Vcs-Browser: https://salsa.debian.org/pkg-deepin-team/dtkgui
 
 Package: libdtkgui-dev
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}, libdtkgui5( =${binary:Version})
-Description: Deepin Tool Kit Gui Devel library
- DtkGui is base devel library of Deepin Qt/C++ applications.
+Section: libdevel
+Depends: libdtkgui5 (= ${binary:Version}), ${misc:Depends}, ${shlibs:Depends}
+Description: Deepin Tool Kit Gui library (development files)
+ DtkGui provides the base devel library of Deepin Qt/C++
+ applications.
  .
- This package contains the header files and static libraries of DtkGui
+ This package provides the library development files.
+ .
+ This package is part of DDE (Deepin Desktop Environment).
+
+Package: libdtkgui5
+Architecture: any
+Depends: libdtkcommon, ${misc:Depends}, ${shlibs:Depends}
+Multi-Arch: same
+Description: Deepin Tool Kit Gui library
+ DtkGui provides the base devel library of Deepin Qt/C++
+ applications.
+ .
+ This package provides the shared library files.
+ .
+ This package is part of DDE (Deepin Desktop Environment).
+
+Package: libdtkgui5-bin
+Section: utils
+Architecture: any
+Depends: libdtkgui5 (= ${binary:Version}), ${misc:Depends}, ${shlibs:Depends}
+Description: Deepin Tool Kit Gui utilities
+ DtkGui provides the base devel library of Deepin Qt/C++
+ applications.
+ .
+ This package provides the utilities of DtkGui.
+ .
+ This package is part of DDE (Deepin Desktop Environment).

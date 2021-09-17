@@ -1,3 +1,15 @@
+dtkgui (5.4.15-1) impish; urgency=medium
+
+  * New upstream release.
+
+ -- Arun Kumar Pariyar <openarungeek@gmail.com>  Fri, 17 Sep 2021 16:22:52 +0545
+
+dtkgui (5.4.0-2) hirsute; urgency=medium
+
+  * New upstream release
+
+ -- Arun Kumar Pariyar <openarungeek@gmail.com>  Thu, 15 Apr 2021 13:50:05 +0545
+
 dtkgui (5.0.0) unstable; urgency=medium
 
   * Release 5.0.0
