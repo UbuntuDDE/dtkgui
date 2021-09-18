@@ -31,13 +31,14 @@
 DGUI_BEGIN_NAMESPACE
 
 class DPlatformTheme;
+class DFontManager;
 class DGuiApplicationHelperPrivate;
 class DGuiApplicationHelper : public QObject, public DCORE_NAMESPACE::DObject
 {
     Q_OBJECT
     D_DECLARE_PRIVATE(DGuiApplicationHelper)
 
-    Q_PROPERTY(ColorType themeType READ themeType WRITE setThemeType NOTIFY themeTypeChanged)
+    Q_PROPERTY(ColorType themeType READ themeType NOTIFY themeTypeChanged)
     Q_PROPERTY(ColorType paletteType READ paletteType WRITE setPaletteType NOTIFY paletteTypeChanged)
 
 public:
@@ -46,15 +47,32 @@ public:
         LightType,
         DarkType
     };
+    Q_ENUM(ColorType)
 
     enum SingleScope {
         UserScope,
         GroupScope,
         WorldScope
     };
+    Q_ENUM(SingleScope)
+
+    enum Attribute {
+        UseInactiveColorGroup    = 1 << 0,
+        ColorCompositing         = 1 << 1,
+
+        /* readonly flag */
+        ReadOnlyLimit            = 1 << 22,
+        IsDeepinPlatformTheme    = ReadOnlyLimit << 0,
+        IsDXcbPlatform           = ReadOnlyLimit << 1,
+        IsXWindowPlatform        = ReadOnlyLimit << 2,
+        IsTableEnvironment       = ReadOnlyLimit << 3,
+        IsDeepinEnvironment      = ReadOnlyLimit << 4,
+    };
+    Q_ENUM(Attribute)
+    Q_DECLARE_FLAGS(Attributes, Attribute)
 
     typedef DGuiApplicationHelper *(*HelperCreator)();
-    static void registerInstanceCreator(HelperCreator creator);
+    D_DECL_DEPRECATED static void registerInstanceCreator(HelperCreator creator);
     static DGuiApplicationHelper *instance();
     ~DGuiApplicationHelper();
 
@@ -66,22 +84,26 @@ public:
     static void generatePaletteColor(DPalette &base, DPalette::ColorType role, ColorType type);
     static void generatePalette(DPalette &base, ColorType type = UnknownType);
     static DPalette fetchPalette(const DPlatformTheme *theme);
-    static void setUseInactiveColorGroup(bool on);
-    static void setColorCompositingEnabled(bool on);
+    Q_DECL_DEPRECATED_X("Use UseInactiveColorGroup enum with setAttribute.") static void setUseInactiveColorGroup(bool on);
+    Q_DECL_DEPRECATED_X("Use ColorCompositing enum with setAttribute.") static void setColorCompositingEnabled(bool on);
     static bool isXWindowPlatform();
+    static bool isTabletEnvironment();
+    static void setAttribute(Attribute attribute, bool enable);
+    static bool testAttribute(Attribute attribute);
 
     DPlatformTheme *systemTheme() const;
     DPlatformTheme *applicationTheme() const;
-    DPlatformTheme *windowTheme(QWindow *window) const;
+    D_DECL_DEPRECATED DPlatformTheme *windowTheme(QWindow *window) const;
 
     DPalette applicationPalette() const;
     void setApplicationPalette(const DPalette &palette);
-    DPalette windowPalette(QWindow *window) const;
+    D_DECL_DEPRECATED DPalette windowPalette(QWindow *window) const;
+
+    const DFontManager *fontManager() const;
 
     static ColorType toColorType(const QColor &color);
     static ColorType toColorType(const QPalette &palette);
     ColorType themeType() const;
-
     ColorType paletteType() const;
 
     static bool setSingleInstance(const QString &key, SingleScope singleScope = UserScope);
@@ -89,13 +111,15 @@ public:
     D_DECL_DEPRECATED static void setSingelInstanceInterval(int interval = 3000);
 
 public Q_SLOTS:
-    void setThemeType(ColorType themeType);
+    D_DECL_DEPRECATED_X("Plase use setPaletteType") void setThemeType(ColorType themeType);
     void setPaletteType(ColorType paletteType);
 
 Q_SIGNALS:
     void themeTypeChanged(ColorType themeType);
     void paletteTypeChanged(ColorType paletteType);
     void newProcessInstance(qint64 pid, const QStringList &arguments);
+    void fontChanged(const QFont &font);
+    void applicationPaletteChanged();
 
 protected:
     explicit DGuiApplicationHelper();

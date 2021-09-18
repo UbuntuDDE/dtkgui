@@ -26,6 +26,7 @@
 #include <DGuiApplicationHelper>
 #include <QGuiApplication>
 
+#include <QtPlatformHeaders/QXcbWindowFunctions>
 #include <qpa/qplatformwindow.h>
 #include <qpa/qplatformnativeinterface.h>
 
@@ -41,11 +42,13 @@ DGUI_BEGIN_NAMESPACE
 DEFINE_CONST_CHAR(hasBlurWindow);
 DEFINE_CONST_CHAR(hasComposite);
 DEFINE_CONST_CHAR(hasNoTitlebar);
+DEFINE_CONST_CHAR(hasWallpaperEffect);
 DEFINE_CONST_CHAR(windowManagerName);
 DEFINE_CONST_CHAR(connectWindowManagerChangedSignal);
 DEFINE_CONST_CHAR(connectHasBlurWindowChanged);
 DEFINE_CONST_CHAR(connectHasCompositeChanged);
 DEFINE_CONST_CHAR(connectHasNoTitlebarChanged);
+DEFINE_CONST_CHAR(connectHasWallpaperEffectChanged);
 DEFINE_CONST_CHAR(getCurrentWorkspaceWindows);
 DEFINE_CONST_CHAR(getWindows);
 DEFINE_CONST_CHAR(windowFromPoint);
@@ -56,6 +59,7 @@ DEFINE_CONST_CHAR(setMWMDecorations);
 DEFINE_CONST_CHAR(getMWMDecorations);
 DEFINE_CONST_CHAR(connectWindowMotifWMHintsChanged);
 DEFINE_CONST_CHAR(popupSystemWindowMenu);
+DEFINE_CONST_CHAR(setWMClassName);
 
 static bool connectWindowManagerChangedSignal(QObject *object, std::function<void ()> slot)
 {
@@ -99,6 +103,17 @@ static bool connectHasNoTitlebarChanged(QObject *object, std::function<void ()> 
 #endif
 
     return connectHasNoTitlebarChanged && reinterpret_cast<bool(*)(QObject *object, std::function<void ()>)>(connectHasNoTitlebarChanged)(object, slot);
+}
+
+static bool connectHasWallpaperEffectChanged(QObject *object, std::function<void ()> slot)
+{
+    QFunctionPointer connectHasWallpaperEffectChanged = Q_NULLPTR;
+
+#if QT_VERSION >= QT_VERSION_CHECK(5, 4, 0)
+    connectHasWallpaperEffectChanged = qApp->platformFunction(_connectHasWallpaperEffectChanged);
+#endif
+
+    return connectHasWallpaperEffectChanged && reinterpret_cast<bool(*)(QObject *object, std::function<void ()>)>(connectHasWallpaperEffectChanged)(object, slot);
 }
 
 static bool connectWindowListChanged(QObject *object, std::function<void ()> slot)
@@ -168,6 +183,14 @@ Q_GLOBAL_STATIC(DWindowManagerHelper_, wmhGlobal)
  * \~chinese 会优先使用此方法支持自定义窗口标题栏。
  * \~chinese \note 只读
  * \~chinese \sa DPlatformWindowHandle::enableNoTitlebarForWindow
+ */
+
+/*!
+ * \~chinese \property DWindowManagerHelper::hasWallpaperEffect
+ * \~chinese \brief 窗口管理器是否支持窗口背景特效绘制。如果支持，则 绘制背景到透明窗口
+ * \~chinese 会使用此方法开启特效窗口壁纸背景绘制。
+ * \~chinese \note 只读
+ * \~chinese \sa DPlatformWindowHandle::hasWallpaperEffectChanged
  */
 
 /*!
@@ -296,6 +319,8 @@ Q_GLOBAL_STATIC(DWindowManagerHelper_, wmhGlobal)
  * \~chinese \brief 信号会在 hasComposite 属性的值改变时被发送
  * \~chinese \fn DWindowManagerHelper::hasNoTitlebarChanged
  * \~chinese \brief 信号会在 hasNoTitlebar 属性的值改变时被发送
+ * \~chinese \fn DWindowManagerHelper::hasWallpaperEffectChanged
+ * \~chinese \brief 信号会在 hasWallpaperEffect 属性的值改变时被发送
  * \~chinese \fn DWindowManagerHelper::windowListChanged
  * \~chinese \brief 信号会在当前环境本地窗口列表变化时被发送。包含打开新窗口、关闭窗口、改变窗口的
  * \~chinese 层叠顺序
@@ -464,6 +489,32 @@ DWindowManagerHelper::MotifDecorations DWindowManagerHelper::getMotifDecorations
 }
 
 /*!
+ * \~chinese \brief DWindowManagerHelper::setWmWindowTypes
+ * \~chinese 直接设置窗口管理器层级提供的窗口类型，如DesktopType和DockType类型也被
+ * \~chinese 桌面环境需要，但是Qt自身并没有提供对应的设置接口
+ * \~chinese \param window
+ * \~chinese \param types
+ */
+void DWindowManagerHelper::setWmWindowTypes(QWindow *window, WmWindowTypes types)
+{
+    const int _types = static_cast<int>(types);
+    QXcbWindowFunctions::setWmWindowType(window, static_cast<QXcbWindowFunctions::WmWindowType>(_types));
+}
+
+/*!
+ * \~chinese \brief DWindowManagerHelper::setWmClassName
+ * \~chinese 设置x11环境上默认使用的wm class name，主要是在窗口创建时用于设置WM_CLASS窗口属性
+ * \~chinese \param name
+ * \~chinese \note 如果值为空，Qt将在下次使用此值时根据程序名称再次初始化此值
+ * \~chinese \sa QCoreApplication::applicationName
+ */
+void DWindowManagerHelper::setWmClassName(const QByteArray &name)
+{
+    typedef void (*SetWmNameType)(const QByteArray&);
+    return QPlatformHeaderHelper::callPlatformFunction<void, SetWmNameType>(_setWMClassName, name);
+}
+
+/*!
  * \~chinese \brief DWindowManagerHelper::popupSystemWindowMenu
  * \~chinese 显示窗口管理器对窗口的菜单，和有边框的窗口在标题栏上点击鼠标右键弹出的菜单内容一致。
  * \~chinese 在 DMainWindow 的标题栏上点击鼠标右键会调用此函数打开系统菜单：
@@ -540,6 +591,21 @@ bool DWindowManagerHelper::hasNoTitlebar() const
 #endif
 
     return hasNoTitlebar && reinterpret_cast<bool(*)()>(hasNoTitlebar)();
+}
+
+/*!
+ * \~chinese \brief DWindowManagerHelper::hasWallpaperEffect
+ * \~chinese \return 如果窗口管理器当前支持背景图片特效绘制返回 true，否则返回 false
+ */
+bool DWindowManagerHelper::hasWallpaperEffect() const
+{
+    QFunctionPointer hasWallpaperEffect = Q_NULLPTR;
+
+#if QT_VERSION >= QT_VERSION_CHECK(5, 4, 0)
+    hasWallpaperEffect = qApp->platformFunction(_hasWallpaperEffect);
+#endif
+
+    return hasWallpaperEffect && reinterpret_cast<bool(*)()>(hasWallpaperEffect)();
 }
 
 /*!
@@ -703,6 +769,9 @@ DWindowManagerHelper::DWindowManagerHelper(QObject *parent)
     });
     connectHasNoTitlebarChanged(this, [this] {
         Q_EMIT hasNoTitlebarChanged();
+    });
+    connectHasWallpaperEffectChanged(this, [this] {
+        Q_EMIT hasWallpaperEffectChanged();
     });
     connectWindowListChanged(this, [this] {
         Q_EMIT windowListChanged();
