@@ -28,7 +28,7 @@ public:
     Q_DECLARE_FLAGS(RegisterdFlags, RegisterdFlag)
 
     enum WatchedFlags {
-        Button_Left = 1,
+        Button_Left     = 1,
         Button_Middle,
         Button_Right,
         Wheel_Up,
@@ -75,7 +75,7 @@ private:
     Q_PRIVATE_SLOT(d_func(), void _q_KeyRelease(const QString &, const int, const int, const QString &))
 };
 
-Q_DECLARE_OPERATORS_FOR_FLAGS(DRegionMonitor::RegisterdFlags);
+Q_DECLARE_OPERATORS_FOR_FLAGS (DRegionMonitor::RegisterdFlags);
 
 DGUI_END_NAMESPACE
 

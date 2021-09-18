@@ -1,10 +1,10 @@
 TEMPLATE = app
-QT += dtkcore gui gui-private dbus network
-CONFIG += thread testcase no_testcase_installs
+QT += dtkcore gui gui-private dbus network testlib widgets
+CONFIG += thread
 CONFIG -= app_bundle
 
-QMAKE_CXXFLAGS += -g -Wall -fprofile-arcs -ftest-coverage -O0
-QMAKE_LFLAGS += -g -Wall -fprofile-arcs -ftest-coverage  -O0
+load(dtk_testcase)
+LIBS += -lgmock
 
 INCLUDEPATH += \
     $$PWD/../src/ \
@@ -13,6 +13,16 @@ INCLUDEPATH += \
     $$PWD/../src/util \
     $$OUT_PWD/../src \
     $$PWD/../src/private
+
+QMAKE_CXXFLAGS += -fno-access-control
+QMAKE_LFLAGS += -fno-access-control
+
+CONFIG(debug, debug|release) {
+LIBS += -lgtest -lgmock
+QMAKE_CXXFLAGS += -g -Wall -fprofile-arcs -ftest-coverage -fsanitize=address -fsanitize-recover=address -O2
+QMAKE_LFLAGS += -g -Wall -fprofile-arcs -ftest-coverage -fsanitize=address -fsanitize-recover=address -O2
+QMAKE_CXX += -g -fprofile-arcs -ftest-coverage -fsanitize=address -fsanitize-recover=address -O2
+}
 
 # 指定moc文件生成目录和src一样
 MOC_DIR=$$OUT_PWD/../src
@@ -34,8 +44,24 @@ linux* {
     DBUS_INTERFACES += dbus_monitor
 }
 
+HEADERS += \
+    test.h
+
 SOURCES += \
     main.cpp \
-    #src/ut_dguiapplicationhelper.cpp \
+    src/ut_dguiapplicationhelper.cpp \
     src/ut_dregionmonitor.cpp \
-    src/ut_dforeignwindow.cpp
+    src/ut_dforeignwindow.cpp \
+    src/ut_dpalette.cpp \
+    src/ut_dplatformhandle.cpp \
+    src/ut_dplatformtheme.cpp \
+    src/ut_dwindowmanagerhelper.cpp \
+    src/ut_dwindowgroupleader.cpp \
+    src/ut_dfontmanager.cpp \
+    src/ut_dsvgrenderer.cpp \
+    src/ut_dtaskbarcontrol.cpp \
+    src/ut_dthumbnailprovider.cpp
+
+RESOURCES += \
+    res.qrc
+

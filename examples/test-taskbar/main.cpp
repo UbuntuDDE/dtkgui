@@ -1,3 +1,6 @@
+#include <DGuiApplicationHelper>
+#include <DFontManager>
+
 #include <QApplication>
 #include <QDesktopWidget>
 
@@ -27,6 +30,11 @@ int main(int argc, char *argv[])
     //这里删除用于测试的desktop文件
     QObject::connect(pTaskbarWindow, &TestTaskbarWindow::closeWindow, [&desktopFile] {
         QFile::remove(desktopFile.fileName());
+    });
+
+    //控制中心修改字体大小可以看到打印输出
+    QObject::connect(DGuiApplicationHelper::instance()->fontManager(), &DFontManager::fontChanged, [] {
+        qDebug() << DGuiApplicationHelper::instance()->fontManager()->baseFont();
     });
 
     return a.exec();
