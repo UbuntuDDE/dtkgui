@@ -1,23 +1,7 @@
-/*
- * Copyright (C) 2019 ~ 2019 Deepin Technology Co., Ltd.
- *
- * Author:     zccrs <zccrs@live.com>
- *
- * Maintainer: zccrs <zhangjide@deepin.com>
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- */
+// SPDX-FileCopyrightText: 2022 UnionTech Software Technology Co., Ltd.
+//
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
 #ifndef DGUIAPPLICATIONHELPER_P_H
 #define DGUIAPPLICATIONHELPER_P_H
 
@@ -32,6 +16,9 @@ QT_END_NAMESPACE
 
 DGUI_BEGIN_NAMESPACE
 
+/*!
+ @private
+ */
 class DGuiApplicationHelperPrivate : public DCORE_NAMESPACE::DObjectPrivate
 {
 public:
@@ -50,7 +37,7 @@ public:
 
     DGuiApplicationHelper::ColorType paletteType = DGuiApplicationHelper::UnknownType;
     // 系统级别的主题设置
-    DPlatformTheme *systemTheme;
+    DPlatformTheme *systemTheme = nullptr;
     QScopedPointer<DPalette> appPalette;
     // 获取QLocalSever消息的等待时间
     static int waitTime;

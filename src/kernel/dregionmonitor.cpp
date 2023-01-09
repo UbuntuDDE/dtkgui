@@ -1,37 +1,35 @@
+// SPDX-FileCopyrightText: 2022 UnionTech Software Technology Co., Ltd.
+//
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
 #include "dregionmonitor.h"
 #include "private/dregionmonitor_p.h"
 
 #include <QObject>
 #include <QDebug>
 #include <QGuiApplication>
+#include <QtDBus/QtDBus>
 
 DGUI_BEGIN_NAMESPACE
 
 /*!
- * \~chinese \class DRegionMonitor
- * \~chinese \brief 一个在指定区域内监视鼠标键盘动作的类
+  \class Dtk::Gui::DRegionMonitor
+  \inmodule dtkgui
+  \brief 一个在指定区域内监视鼠标键盘动作的类.
  */
 
 /*!
- *
- * \~chinese \enum DRegionMonitor::RegisterdFlag
- * \~chinese DRegionMonitor::RegisterdFlag 定义了 DRegionMonitor 监听标志。
- *
- * \~chinese \var DRegionMonitor::Motion
- * \~chinese 代表监听鼠标移动。
- *
- * \~chinese \var DRegionMonitor::Button
- * \~chinese 代表监听鼠标按键。
- *
- * \~chinese \var DRegionMonitor::Key
- * \~chinese 代表监听键盘按键。
- */
+  \enum DRegionMonitor::RegisterdFlag
+  DRegionMonitor::RegisterdFlag 定义了 DRegionMonitor 监听标志。
 
-/*!
- * \~chinese \fn DRegionMonitor::registerdFlagsChanged()
- * \~chinese \brief registerdFlagChanged 信号会在监听标志 registerdFlags 被改变的时候被触发。
- *
- * \~chinese \sa DRegionMonitor::setRegisterFlags(RegisterdFlags flags)
+  \value Motion
+  代表监听鼠标移动。
+
+  \value Button
+  代表监听鼠标按键。
+
+  \value Key
+  代表监听键盘按键。
  */
 
 DRegionMonitor::DRegionMonitor(QObject *parent)
@@ -57,11 +55,6 @@ QRegion DRegionMonitor::watchedRegion() const
     return d->watchedRegion;
 }
 
-/*!
- * \~chinese \brief DRegionMonitor::registerFlags
- * \~chinese \brief 获取监听模式
- * \~chinese \sa DRegionMonitor::setRegisterFlags(RegisterdFlags flags)
- */
 DRegionMonitor::RegisterdFlags DRegionMonitor::registerFlags() const
 {
     D_DC(DRegionMonitor);
@@ -106,12 +99,16 @@ void DRegionMonitor::setWatchedRegion(const QRegion &region)
 }
 
 /*!
- * \~chinese \brief DRegionMonitor::setRegisterFlags
- * \~chinese \brief 设置监听模式
- * \~chinese \param flags
- * \~chinese \brief 监听模式，需要注意DRegionMonitor::Motion监听鼠标移动会影响性能，默认包含，如果
- * \~chinese \brief 需要可通过此函数去掉DRegionMonitor::Motion
- * \~chinese \sa DRegionMonitor::registerFlags()
+  \property DRegionMonitor::registerdFlags
+
+  \brief 监听模式属性.
+  \brief 监听模式，需要注意 DRegionMonitor::Motion 监听鼠标移动会影响性能，默认包含，如果
+  需要可通过此函数去掉 DRegionMonitor::Motion .
+
+  registerdFlagChanged 信号会在监听标志 registerdFlags 被改变的时候被触发.
+
+  \a flags 监听模式.
+
  */
 void DRegionMonitor::setRegisterFlags(RegisterdFlags flags)
 {
@@ -135,8 +132,15 @@ void DRegionMonitor::setCoordinateType(DRegionMonitor::CoordinateType type)
 
 DRegionMonitorPrivate::DRegionMonitorPrivate(DRegionMonitor *q)
     : DObjectPrivate(q)
-    , eventInter(new XEventMonitor("com.deepin.api.XEventMonitor", "/com/deepin/api/XEventMonitor", QDBusConnection::sessionBus()))
 {
+    if (QDBusConnection::sessionBus().interface()->isServiceRegistered(QLatin1String("org.deepin.dde.XEventMonitor1"))) {
+        eventInter = new XEventMonitor("org.deepin.dde.XEventMonitor1", "/org/deepin/dde/XEventMonitor1",
+                                       "org.deepin.dde.XEventMonitor1", q);
+    } else {
+        eventInter = new XEventMonitor("com.deepin.api.XEventMonitor", "/com/deepin/api/XEventMonitor",
+                                       "com.deepin.api.XEventMonitor", q);
+    }
+
 }
 
 DRegionMonitorPrivate::~DRegionMonitorPrivate()

@@ -1,23 +1,6 @@
-/*
- * Copyright (C) 2019 ~ 2019 Deepin Technology Co., Ltd.
- *
- * Author:     Chris Xiong <chirs241097@gmail.com>
- *
- * Maintainer: Chris Xiong <chirs241097@gmail.com>
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- */
+// SPDX-FileCopyrightText: 2022 UnionTech Software Technology Co., Ltd.
+//
+// SPDX-License-Identifier: LGPL-3.0-or-later
 
 #include "dfiledragserver.h"
 #include "private/dfiledragcommon_p.h"
@@ -28,6 +11,7 @@
 #include <QUuid>
 #include <QDBusServer>
 #include <QDBusConnection>
+#include <QDBusConnectionInterface>
 #include <QDBusVariant>
 #include <QDBusError>
 #include <QCoreApplication>
@@ -37,6 +21,9 @@ DGUI_BEGIN_NAMESPACE
 
 class DDndSourceInterface;
 
+/*!
+ @private
+ */
 class DFileDragServerPrivate : public DCORE_NAMESPACE::DObjectPrivate
 {
     QMap<QString, QVariant> data;
@@ -93,14 +80,15 @@ private:
 };
 
 /*!
- * \~chinese \class DFileDragServer
- * \~chinese \brief 提供拖拽文件时与文件接收方交互的接口。
+  \class Dtk::Gui::DFileDragServer
+  \inmodule dtkgui
+  \brief 提供拖拽文件时与文件接收方交互的接口.
  */
 
 /*!
- * \~chinese \fn DFileDragServer::targetDataChanged
- * \~chinese \param
- * \~chinese \brief 信号会在接收方调用 setData 变化时被发送
+  \fn void DFileDragServer::targetDataChanged(const QString &key)
+
+  \brief 信号会在接收方调用 setData 变化时被发送， \a key 为改变的键值.
  */
 
 DFileDragServer::DFileDragServer(QObject *parent)
@@ -118,9 +106,9 @@ DFileDragServer::~DFileDragServer()
 }
 
 /*!
- * \~chinese \brief DFileDragServer::targetData
- * \~chinese \param key
- * \~chinese \return 返回文件接收方设置数据 key 对应的 value
+  \brief DFileDragServer::targetData.
+  \a key
+  \return 返回文件接收方设置数据 \a key 对应的 value
  */
 QVariant DFileDragServer::targetData(const QString &key) const
 {
@@ -130,9 +118,9 @@ QVariant DFileDragServer::targetData(const QString &key) const
 }
 
 /*!
- *\~chinese \brief DFileDragServer::setProgress
- *\~chinese \param progress 当前进度
- *\~chinese \brief 拖拽进度更新，接收方会受到 progressChanged 信号
+  \brief DFileDragServer::setProgress.
+  \a progress 当前进度
+  \brief 拖拽进度更新，接收方会受到 progressChanged 信号.
  */
 void DFileDragServer::setProgress(int progress)
 {
@@ -145,9 +133,9 @@ void DFileDragServer::setProgress(int progress)
 }
 
 /*!
- * \~chinese \brief DFileDragServer::setState
- * \~chinese \param state
- * \~chinese \brief 改变状态，接收方会受到 stateChanged 信号
+  \brief DFileDragServer::setState.
+  \a state
+  \brief 改变状态，接收方会受到 stateChanged 信号.
  */
 void DFileDragServer::setState(DFileDragState state)
 {
@@ -183,7 +171,9 @@ DFileDragServerPrivate::~DFileDragServerPrivate()
 void DFileDragServerPrivate::writeMimeData(QMimeData *dest)
 {
     dest->setData(DND_MIME_SERVICE, QDBusConnection::sessionBus().baseService().toUtf8());
-    dest->setData(DND_MIME_PID, QString::number(QCoreApplication::applicationPid()).toUtf8());
+    // qApp->applicationPid() not right in ll-box
+    auto pid = QDBusConnection::sessionBus().interface()->servicePid(QDBusConnection::sessionBus().baseService());
+    dest->setData(DND_MIME_PID, QString::number(pid).toUtf8());
     dest->setData(DND_MIME_UUID, uuid.toString().toUtf8());
 }
 
