@@ -1,23 +1,6 @@
-/*
- * Copyright (C) 2021 ~ 2021 Deepin Technology Co., Ltd.
- *
- * Author:     Chen Bin <chenbin@uniontech.com>
- *
- * Maintainer: Chen Bin <chenbin@uniontech.com>
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- */
+// SPDX-FileCopyrightText: 2022 UnionTech Software Technology Co., Ltd.
+//
+// SPDX-License-Identifier: LGPL-3.0-or-later
 
 #include "test.h"
 
@@ -33,6 +16,11 @@ int main(int argc, char *argv[])
     // gerrit编译时没有显示器，需要指定环境变量
     if (!qEnvironmentVariableIsSet("DISPLAY"))
         qputenv("QT_QPA_PLATFORM", "offscreen");
+
+    // for ut_dicon.cpp 测试指定缩放时 dicon 的 ut
+    // 如果需要删除，请一起删除 ut_dicon.cpp 中 ASSERT_FLOAT_EQ(devicePixelRatio, 1.25);
+    qputenv("D_DXCB_DISABLE_OVERRIDE_HIDPI","1");
+    qputenv("QT_SCALE_FACTOR","1.25");
 
     QApplication app(argc, argv);
     ::testing::InitGoogleTest(&argc, argv);

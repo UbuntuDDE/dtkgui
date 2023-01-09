@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2022 UnionTech Software Technology Co., Ltd.
+//
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
 #include "dfiledragserver.h"
 #include "dfiledrag.h"
 
@@ -52,9 +56,14 @@ protected:
         connect(drag, &DFileDrag::targetUrlChanged, [drag] {
             lbr->setText(drag->targetUrl().toString());
         });
-        drag->exec();
 
-        Q_EMIT dragFinished();
+        Qt::DropAction res = drag->exec(Qt::MoveAction);
+        if (res!= Qt::IgnoreAction)
+            Q_EMIT dragFinished();
+        else {
+            s->deleteLater();
+            s = nullptr;
+        }
     }
 
 private:

@@ -1,23 +1,7 @@
-/*
- * Copyright (C) 2019 ~ 2019 Deepin Technology Co., Ltd.
- *
- * Author:     zccrs <zccrs@live.com>
- *
- * Maintainer: zccrs <zhangjide@deepin.com>
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- */
+// SPDX-FileCopyrightText: 2022 UnionTech Software Technology Co., Ltd.
+//
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
 #include "dplatformtheme.h"
 #include "private/dplatformtheme_p.h"
 
@@ -100,7 +84,11 @@ void DPlatformThemePrivate::_q_onThemePropertyChanged(const QByteArray &name, co
     }
 
     if (p.hasNotifySignal()) {
-        p.notifySignal().invoke(q, QGenericArgument(value.typeName(), value.constData()));
+        // invoke会做Q_ASSERT(mobj->cast(object))判断, DPlatformTheme的dynamic metaObject为
+        // qt5platform-plugin插件的DNativeSettings. 导致崩溃.
+        // invokeOnGadget与invoke代码逻辑一致, 只是少了异步支持.
+        if (!p.notifySignal().invokeOnGadget(q, QGenericArgument(value.typeName(), value.constData())))
+            qWarning() << "_q_onThemePropertyChanged() error when notify signal" << p.notifySignal().name();
     }
 }
 
@@ -142,8 +130,10 @@ void DPlatformThemePrivate::notifyPaletteChanged()
 }
 
 /*!
- * \~chinese \class DPlatformTheme
- * \~chinese \brief 一个提供窗口主题的类
+  \class Dtk::Gui::DPlatformTheme
+  \inmodule dtkgui
+  \brief 一个提供窗口主题的类.
+
  */
 DPlatformTheme::DPlatformTheme(quint32 window, QObject *parent)
     : DNativeSettings(*new DPlatformThemePrivate(this),

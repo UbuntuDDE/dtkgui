@@ -1,0 +1,18 @@
+@PACKAGE_INIT@
+
+set_and_check(DtkGui_INCLUDE_DIRS "@PACKAGE_INCLUDE_INSTALL_DIR@")
+set_and_check(DtkGui_LIBRARY_DIRS "@PACKAGE_LIBRARY_INSTALL_DIR@")
+set(DtkGui_TOOL_DIRS "@PACKAGE_TOOL_INSTALL_DIR@")
+
+include(CMakeFindDependencyMacro)
+find_dependency(DtkCore REQUIRED)
+find_library(DtkGui_LIBRARIES dtkgui ${DtkGui_LIBRARY_DIRS})
+set(DtkGui_LIBRARIES ${DtkGui_LIBRARIES} ${DtkCore_LIBRARIES})
+
+include_directories("${DtkGui_INCLUDE_DIRS}")
+
+check_required_components(DtkGui)
+
+# Keep deprecated variables for compatibility
+set(DTKGUI_INCLUDE_DIR ${DtkGui_INCLUDE_DIRS})
+set(DTKGUI_TOOL_DIR ${DtkGui_TOOL_DIRS})

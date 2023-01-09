@@ -1,27 +1,11 @@
-/*
- * Copyright (C) 2019 ~ 2019 Deepin Technology Co., Ltd.
- *
- * Author:     zccrs <zccrs@live.com>
- *
- * Maintainer: zccrs <zhangjide@deepin.com>
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- */
+// SPDX-FileCopyrightText: 2022 UnionTech Software Technology Co., Ltd.
+//
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
 #include "dguiapplicationhelper.h"
 #include "private/dguiapplicationhelper_p.h"
 #include "dplatformhandle.h"
-#include <util/DFontManager>
+#include <DFontManager>
 
 #include <QHash>
 #include <QColor>
@@ -34,6 +18,35 @@
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QLoggingCategory>
+#include <QDir>
+#include <QLockFile>
+#include <QDirIterator>
+#include <QDesktopServices>
+
+#ifdef Q_OS_UNIX
+#include <QDBusError>
+#include <QDBusReply>
+#include <QDBusInterface>
+#include <QDBusPendingCall>
+#include <QDBusConnection>
+#include <QDBusConnectionInterface>
+#include <QProcess>
+#endif
+#include <QDir>
+#include <QLockFile>
+#include <QDirIterator>
+#include <QDesktopServices>
+
+#ifdef Q_OS_UNIX
+#include <QDBusError>
+#include <QDBusReply>
+#include <QDBusInterface>
+#include <QDBusPendingCall>
+#include <QDBusConnection>
+#include <QDBusConnectionInterface>
+#include <QProcess>
+#include <DPathBuf>
+#endif
 
 #include <private/qguiapplication_p.h>
 #include <qpa/qplatformservices.h>
@@ -44,6 +57,39 @@
 #include <unistd.h>
 #endif
 
+#ifdef Q_OS_UNIX
+class EnvReplaceGuard
+{
+public:
+    EnvReplaceGuard(const int uid);
+    ~EnvReplaceGuard();
+
+    char *m_backupLogName;
+    char *m_backupHome;
+    bool initialized = false;
+};
+
+EnvReplaceGuard::EnvReplaceGuard(const int uid)
+{
+    if (struct passwd *pwd = getpwuid(static_cast<__uid_t>(uid))) {
+        m_backupLogName = getenv("LOGNAME");
+        m_backupHome = getenv("HOME");
+
+        setenv("LOGNAME", pwd->pw_name, 1);
+        setenv("HOME", pwd->pw_dir, 1);
+        initialized = true;
+    }
+}
+
+EnvReplaceGuard::~EnvReplaceGuard()
+{
+    if (initialized) {
+        setenv("LOGNAME", m_backupLogName, 1);
+        setenv("HOME", m_backupHome, 1);
+    }
+}
+#endif
+
 DGUI_BEGIN_NAMESPACE
 
 #ifdef QT_DEBUG
@@ -52,244 +98,16 @@ Q_LOGGING_CATEGORY(dgAppHelper, "dtk.dguihelper")
 Q_LOGGING_CATEGORY(dgAppHelper, "dtk.dguihelper", QtInfoMsg)
 #endif
 
-#ifdef Q_OS_LINUX
-class DInstanceGuard {
-public:
-    static bool guard(const QString &name);
-    static void enterCriticalSection();
-    static void leaveCriticalSection();
-
-    class DCriticalHolder {
-    public:
-        DCriticalHolder() {
-            DInstanceGuard::enterCriticalSection();
-        }
-        ~DCriticalHolder() {
-            DInstanceGuard::leaveCriticalSection();
-        }
-    };
-
-private:
-    static bool setInstanceName(const QString &name);
-    static void shmInit();
-    static void destroy();
-    static void errorExitIf(bool cond, QStringView reason);
-
-    struct SharedVarables {
-        pid_t               pid[2];
-        pthread_mutex_t     mutex[2];
-
-        struct {
-          pid_t             criticalProcessPid;
-          pthread_mutex_t   criticalSectionMtx;
-        } CriticalSection;
-    };
-
-    static DInstanceGuard * s_pSelf;
-    static QString          s_name;
-
-    static int              s_shmId;
-    static key_t            s_shmKey;
-
-    static QVector<QString> s_procIdPath;
-    static SharedVarables * s_pShm;
-    static int              s_nLock;
-
-private:
-    DInstanceGuard();
-    ~DInstanceGuard() = default;
-    DInstanceGuard(const DInstanceGuard &) = delete;
-    DInstanceGuard &operator=(const DInstanceGuard &) = delete;
-    DInstanceGuard(DInstanceGuard &&) = delete;
-    DInstanceGuard &operator=(DInstanceGuard &&) = delete;
-};
-
-DInstanceGuard  *   DInstanceGuard::s_pSelf  = nullptr;
-QString             DInstanceGuard::s_name;
-
-int                 DInstanceGuard::s_shmId  = 0;
-key_t               DInstanceGuard::s_shmKey = 0;
-
-QVector<QString>    DInstanceGuard::s_procIdPath;
-DInstanceGuard::SharedVarables *  DInstanceGuard::s_pShm = nullptr;
-int                 DInstanceGuard::s_nLock  = -1;
-
-/*!
-    \internal DInstanceGuard::DInstanceGuard 构造 DInstanceGuard 实例并初始化
-
-    需要预先传入 name 实例名，相同实例名的实例在系统中只能同时存在最好两个。锁是对两个
-    pid 的保护，获取到锁才能改写 pid，最终是根据 pid 来判断当前有几个进程、应该启动几个
-    进程。传入的 name 应该按照 Session 或 Scope 做区分，比如同一个用户连接多个
-    VNC、同一台主机登陆多个用户。
- */
-DInstanceGuard::DInstanceGuard()
-{
-    for (int i = 0; i < 2 && s_nLock == -1; ++i) {
-        if (pthread_mutex_trylock(&s_pShm->mutex[i]) != 0) {
-            continue;
-        }
-        s_nLock = i;
-        s_pShm->pid[i] = getpid();
-        std::atexit(destroy);
-    }
-    QString criticalProc = QString("/proc/%1").arg(s_pShm->CriticalSection.criticalProcessPid);
-    if (s_pShm->CriticalSection.criticalProcessPid && !QFile(criticalProc).exists()) {
-        pthread_mutex_unlock(&s_pShm->CriticalSection.criticalSectionMtx);
-    }
-
-    errorExitIf(s_nLock == -1, u"Has two instance running.");
-}
-
-/*!
-    \internal DInstanceGuard::shmInit() 初始化共享内存
-
-    对共享内存进行初始化，存放进程级别的互斥锁、记录进程的 pid。
-*/
-void DInstanceGuard::shmInit()
-{
-    s_shmKey = qHash(s_name);
-    s_procIdPath.resize(2);
-
-    pthread_mutexattr_t mutexSharedAttr[2] = {};
-    for (int i = 0; i < 2; ++i) {
-        pthread_mutexattr_setpshared(&mutexSharedAttr[i], PTHREAD_PROCESS_SHARED);
-        pthread_mutexattr_settype(&mutexSharedAttr[i], PTHREAD_MUTEX_RECURSIVE_NP);
-    }
-
-    // 获取共享内存，如果不存在则创建并初始化
-    bool clearFlag = false;
-    s_shmId = shmget(s_shmKey, 0, 0666 | IPC_CREAT);
-    if (s_shmId == -1) {
-        s_shmId = shmget(s_shmKey, sizeof(SharedVarables), 0666 | IPC_CREAT);
-        errorExitIf(s_shmId < 0, u"Create share memory failed.");
-        clearFlag = true;
-    }
-    s_pShm = static_cast<SharedVarables*>(shmat(s_shmId, nullptr, 0));
-    errorExitIf(!s_pShm, u"Attach share memory failed.");
-    if (clearFlag) memset(s_pShm, 0, sizeof(SharedVarables));
-
-    // 对已退出/新创建的进程的锁进行重新初始化，防止　mutex 内部错误
-    for (int i = 0; i < 2; ++i) {
-        s_procIdPath[i] = QString("/proc/%1").arg(s_pShm->pid[i]);
-        if (s_pShm->pid[i] && !QFile(s_procIdPath[i]).exists()) {
-            pthread_mutex_destroy(&s_pShm->mutex[i]);
-            pthread_mutex_init(&s_pShm->mutex[i], &mutexSharedAttr[i]);
-            s_pShm->pid[i] = 0;
-        }
-        pthread_mutexattr_destroy(&mutexSharedAttr[i]);
-    }
-
-    // 对临界区锁的有效性进行检测，重新初始化
-    QString criticalProcPath = QString("/proc/%1").arg(s_pShm->CriticalSection.criticalProcessPid);
-    if (!s_pShm->CriticalSection.criticalProcessPid || !QFile(criticalProcPath).exists()) {
-        // Critical section init
-        pthread_mutexattr_t criticalMtxSharedAttr = {};
-        pthread_mutexattr_setpshared(&criticalMtxSharedAttr, PTHREAD_PROCESS_SHARED);
-        pthread_mutexattr_settype(&criticalMtxSharedAttr, PTHREAD_MUTEX_RECURSIVE_NP);
-        pthread_mutex_init(&s_pShm->CriticalSection.criticalSectionMtx, &criticalMtxSharedAttr);
-        pthread_mutexattr_destroy(&criticalMtxSharedAttr);
-    }
-}
-
-/*!
-    \fn DInstanceGuard::setInstanceName(const QString &name) 设置实例名
-
-    根据实例名初始化对应的共享内存
-*/
-bool DInstanceGuard::setInstanceName(const QString &name)
-{
-    errorExitIf(name.isEmpty(), u"Set instance name error...");
-    if (!s_name.isEmpty()) {
-        qCWarning(dgAppHelper, "Set instance name failed. already has a name...");
-        return false;
-    }
-    s_name = name;
-
-    return true;
-}
-
-/*!
-    \fn DInstanceGuard::guard 创建 DInstanceGuard 实例
-
-    传入 name 实例名，确保和当前 name 相同的实例在系统中只能同时存在不超过两个，确保后续可以完成后者到
-    前者的通信过程，最终只保留一个实例。负责完成 DGuiApplicationHelper::setSingleInstance 中的
-    第一阶段。
- */
-bool DInstanceGuard::guard(const QString &name)
-{
-    static std::once_flag initFlag;
-    bool retValue = false;
-    std::call_once(initFlag, [name, &retValue] {
-        retValue = setInstanceName(name);
-        shmInit();
-        s_pSelf = s_pSelf ? s_pSelf : new DInstanceGuard();
-    });
-
-    return retValue;
-}
-
-/*!
-    \internal DInstanceGuard::destroy() 销毁共享内存
-
-    只有在程序正常退出的时候由 atexit 的注册来调用。即使异常退出也不会对下次执行造成影响。
- */
-void DInstanceGuard::destroy()
-{
-    if (!s_pSelf) {
-        return;
-    }
-
-    bool shmRelease = false;
-    int anotherProc = !s_nLock;
-    if (!QFile(s_procIdPath[anotherProc]).exists()) {
-        shmRelease = true;
-        pthread_mutex_unlock(&s_pShm->mutex[anotherProc]);
-    }
-    pthread_mutex_unlock(&s_pShm->mutex[s_nLock]);
-    if (s_pShm->CriticalSection.criticalProcessPid == getpid()) {
-        s_pShm->CriticalSection.criticalProcessPid = 0;
-        pthread_mutex_unlock(&s_pShm->CriticalSection.criticalSectionMtx);
-    }
-    if (shmRelease) {
-        shmctl(s_shmId, IPC_RMID, nullptr);
-    }
-
-    delete s_pSelf;
-    s_pSelf = nullptr;
-}
-
-/*!
-    \fn void DInstanceGuard::enterCriticalSection()
-
-    进入临界区。 按 Guard 传入的 name 进行代码段的保护。不能单独使用，必须先调用 Guard。
-    不能用于同一进程内的多线程。根据实例名的 scope，最大可提供系统级的保护。
-    确保 DGuiApplicationHelper::setSingleInstance 中的第二阶段正确执行。
-*/
-void DInstanceGuard::enterCriticalSection() {
-    errorExitIf(s_name.isEmpty() || !s_pSelf, u"Enter critical section failed. must set instance name first.");
-    if (pthread_mutex_lock(&s_pShm->CriticalSection.criticalSectionMtx) == 0) {
-        s_pShm->CriticalSection.criticalProcessPid = getpid();
-    }
-}
-
-void DInstanceGuard::leaveCriticalSection() {
-    pthread_mutex_unlock(&s_pShm->CriticalSection.criticalSectionMtx);
-}
-
-void DInstanceGuard::errorExitIf(bool cond, QStringView reason) {
-    if (cond) {
-        qCWarning(dgAppHelper) << reason << " should exit program.";
-        qFatal("Error: DInstanceGuard::errorExitIf.");
-    }
-}
-#endif
-
 Q_GLOBAL_STATIC(QLocalServer, _d_singleServer)
+
 static quint8 _d_singleServerVersion = 1;
 Q_GLOBAL_STATIC(DFontManager, _globalFM)
 
 #define WINDOW_THEME_KEY "_d_platform_theme"
 
+/*!
+ @private
+ */
 class _DGuiApplicationHelper
 {
 public:
@@ -320,6 +138,43 @@ public:
     static DGuiApplicationHelper::HelperCreator creator;
 };
 
+class LoadManualServiceWorker : public QThread
+{
+public:
+    explicit LoadManualServiceWorker(QObject *parent = nullptr);
+    ~LoadManualServiceWorker() override;
+    void checkManualServiceWakeUp();
+
+protected:
+    void run() override;
+};
+
+LoadManualServiceWorker::LoadManualServiceWorker(QObject *parent)
+    : QThread(parent)
+{
+    if (!parent)
+        connect(qApp, &QGuiApplication::aboutToQuit, this, std::bind(&LoadManualServiceWorker::exit, this, 0));
+}
+
+LoadManualServiceWorker::~LoadManualServiceWorker()
+{
+}
+
+void LoadManualServiceWorker::run()
+{
+    QDBusInterface("com.deepin.Manual.Search",
+                   "/com/deepin/Manual/Search",
+                   "com.deepin.Manual.Search");
+}
+
+void LoadManualServiceWorker::checkManualServiceWakeUp()
+{
+    if (this->isRunning())
+        return;
+
+    start();
+}
+
 DGuiApplicationHelper::HelperCreator _DGuiApplicationHelper::creator = _DGuiApplicationHelper::defaultCreator;
 Q_GLOBAL_STATIC(_DGuiApplicationHelper, _globalHelper)
 
@@ -334,13 +189,6 @@ DGuiApplicationHelperPrivate::DGuiApplicationHelperPrivate(DGuiApplicationHelper
 
 void DGuiApplicationHelperPrivate::init()
 {
-    D_Q(DGuiApplicationHelper);
-
-    systemTheme = new DPlatformTheme(0, q);
-    // 直接对应到系统级别的主题, 不再对外提供为某个单独程序设置主题的接口.
-    // 程序设置自身主题相关的东西皆可通过 setPaletteType 和 setApplicationPalette 实现.
-    appTheme = systemTheme;
-
     if (qGuiApp) {
         initApplication(qGuiApp);
     } else {
@@ -353,6 +201,15 @@ void DGuiApplicationHelperPrivate::init()
 void DGuiApplicationHelperPrivate::initApplication(QGuiApplication *app)
 {
     D_Q(DGuiApplicationHelper);
+
+    if (!systemTheme) {
+        // 需要在QGuiApplication创建后再创建DPlatformTheme，否则DPlatformTheme无效.
+        // qGuiApp->platformFunction()会报警告，并返回nullptr.
+        systemTheme = new DPlatformTheme(0, q);
+        // 直接对应到系统级别的主题, 不再对外提供为某个单独程序设置主题的接口.
+        // 程序设置自身主题相关的东西皆可通过 setPaletteType 和 setApplicationPalette 实现.
+        appTheme = systemTheme;
+    }
 
     // 跟随application销毁
     qAddPostRoutine(staticCleanApplication);
@@ -388,11 +245,8 @@ void DGuiApplicationHelperPrivate::staticInitApplication()
     if (!_globalHelper.exists())
         return;
 
-    if (DGuiApplicationHelper *helper = _globalHelper->m_helper.load()) {
-        // systemTheme未创建时说明DGuiApplicationHelper还未初始化
-        if (helper->d_func()->systemTheme)
-            helper->d_func()->initApplication(qGuiApp);
-    }
+    if (DGuiApplicationHelper *helper = _globalHelper->m_helper.load())
+        helper->d_func()->initApplication(qGuiApp);
 }
 
 void DGuiApplicationHelperPrivate::staticCleanApplication()
@@ -474,54 +328,52 @@ bool DGuiApplicationHelperPrivate::isCustomPalette() const
 }
 
 /*!
- * \~chinese \class DGuiApplicationHelper
- * \~chinese \brief DGuiApplicationHelper 应用程序的 GUI ，如主题、调色板等
+  \class Dtk::Gui::DGuiApplicationHelper
+  \inmodule dtkgui
+  \brief DGuiApplicationHelper 应用程序的 GUI ，如主题、调色板等.
  */
 
 /*!
- *
- * \~chinese \enum DGuiApplicationHelper::ColorType
- * \~chinese DGuiApplicationHelper::ColorType 定义了主题类型
- *
- * \~chinese \var DGuiApplicationHelper:ColorType DGuiApplicationHelper::UnknownType
- * \~chinese 未知主题(浅色主题或深色主题)
- *
- * \~chinese \var DGuiApplicationHelper:ColorType DGuiApplicationHelper::LightType
- * \~chinese 浅色主题
- *
- * \~chinese \var DGuiApplicationHelper:ColorType DGuiApplicationHelper::DarkType
- * \~chinese 深色主题
+  \enum DGuiApplicationHelper::ColorType
+  DGuiApplicationHelper::ColorType 定义了主题类型.
+  
+  \var DGuiApplicationHelper::ColorType DGuiApplicationHelper::UnknownType
+  未知主题(浅色主题或深色主题)
+  
+  \var DGuiApplicationHelper::ColorType DGuiApplicationHelper::LightType
+  浅色主题
+  
+  \var DGuiApplicationHelper::ColorType DGuiApplicationHelper::DarkType
+  深色主题
  */
 
 /*!
- *
- * \~chinese \enum DGuiApplicationHelper::Attribute
- * \~chinese DGuiApplicationHelper::Attribute 定义了功能属性
- *
- * \~chinese \var DGuiApplicationHelper:Attribute DGuiApplicationHelper::UseInactiveColorGroup
- * \~chinese 如果开启，当窗口处于Inactive状态时就会使用QPalette::Inactive的颜色，否则窗口将没有任何颜色变化。
- *
- * \~chinese \var DGuiApplicationHelper:Attribute DGuiApplicationHelper::ColorCompositing
- * \~chinese 是否采用半透明样式的调色板。
- *
- * \~chinese \var DGuiApplicationHelper:Attribute DGuiApplicationHelper::ReadOnlyLimit
- * \~chinese 区分只读枚举。
- *
- * \~chinese \var DGuiApplicationHelper:Attribute DGuiApplicationHelper::IsDeepinPlatformTheme
- * \~chinese 获取当前是否使用deepin的platformtheme插件，platformtheme插件可以为Qt程序提供特定的控件样式，默认使用chameleon主题。
- *
- * \~chinese \var DGuiApplicationHelper:Attribute DGuiApplicationHelper::IsDPlatformDXcb
- * \~chinese 获取当前使用的是不是dtk的xcb窗口插件，dxcb插件提供了窗口圆角和阴影功能。
- *
- * \~chinese \var DGuiApplicationHelper:Attribute DGuiApplicationHelper::IsXWindowPlatform
- * \~chinese 获取当前是否运行在X11环境中。
- *
- * \~chinese \var DGuiApplicationHelper:Attribute DGuiApplicationHelper::IsTableEnvironment
- * \~chinese 获取当前是否运行在deepin平板环境中，检测XDG_CURRENT_DESKTOP环境变量是不是tablet结尾。
- *
- * \~chinese \var DGuiApplicationHelper:Attribute DGuiApplicationHelper::IsDeepinEnvironment
- * \~chinese 获取当前是否运行在deepin桌面环境中，检测XDG_CURRENT_DESKTOP环境变量是不是deepin。
- *
+  \enum DGuiApplicationHelper::Attribute
+  DGuiApplicationHelper::Attribute 定义了功能属性
+  
+  \var DGuiApplicationHelper::Attribute DGuiApplicationHelper::UseInactiveColorGroup
+  如果开启，当窗口处于Inactive状态时就会使用QPalette::Inactive的颜色，否则窗口将没有任何颜色变化。
+  
+  \var DGuiApplicationHelper::Attribute DGuiApplicationHelper::ColorCompositing
+  是否采用半透明样式的调色板。
+  
+  \var DGuiApplicationHelper::Attribute DGuiApplicationHelper::ReadOnlyLimit
+  区分只读枚举。
+  
+  \var DGuiApplicationHelper::Attribute DGuiApplicationHelper::IsDeepinPlatformTheme
+  获取当前是否使用deepin的platformtheme插件，platformtheme插件可以为Qt程序提供特定的控件样式，默认使用chameleon主题。
+  
+  \var DGuiApplicationHelper::Attribute DGuiApplicationHelper::IsDXcbPlatform
+  获取当前使用的是不是dtk的xcb窗口插件，dxcb插件提供了窗口圆角和阴影功能。
+  
+  \var DGuiApplicationHelper::Attribute DGuiApplicationHelper::IsXWindowPlatform
+  获取当前是否运行在X11环境中。
+  
+  \var DGuiApplicationHelper::Attribute DGuiApplicationHelper::IsTableEnvironment
+  获取当前是否运行在deepin平板环境中，检测XDG_CURRENT_DESKTOP环境变量是不是tablet结尾。
+  
+  \var DGuiApplicationHelper::Attribute DGuiApplicationHelper::IsDeepinEnvironment
+  获取当前是否运行在deepin桌面环境中，检测XDG_CURRENT_DESKTOP环境变量是不是deepin。
  */
 
 DGuiApplicationHelper::DGuiApplicationHelper()
@@ -539,9 +391,10 @@ void DGuiApplicationHelper::initialize()
 }
 
 /*!
- * \~chinese \brief DGuiApplicationHelper::registerInstanceCreator创建 DGuiApplicationHelper 对象
- * \~chinese \param creator 函数指针
- * \~chinese \note \row 一定要先调用此函数,再使用 DGuiApplicationHelper::instance()
+  \brief 创建 DGuiApplicationHelper 对象.
+
+  \param creator 函数指针
+  \note 一定要先调用此函数,再使用 DGuiApplicationHelper::instance()
  */
 void DGuiApplicationHelper::registerInstanceCreator(DGuiApplicationHelper::HelperCreator creator)
 {
@@ -562,8 +415,8 @@ inline static int adjustColorValue(int base, qint8 increment, int max = 255)
 }
 
 /*!
- * \~chinese \brief DGuiApplicationHelper::instance返回 DGuiApplicationHelper 对象
- * \~chinese \return DGuiApplicationHelper对象
+  \brief DGuiApplicationHelper::instance返回 DGuiApplicationHelper 对象
+  \return DGuiApplicationHelper对象
  */
 DGuiApplicationHelper *DGuiApplicationHelper::instance()
 {
@@ -576,18 +429,19 @@ DGuiApplicationHelper::~DGuiApplicationHelper()
 }
 
 /*!
- * \~chinese \brief DGuiApplicationHelper::adjustColor 调整颜色
- * \~chinese \note \row 取值范围均为 -100 ~ 100 ,当三原色参数为-100时，颜色为黑色，参数为100时，颜色为白色.
- * \~chinese 以透明度( alphaFloat )为例,当参数为负数时基础色的 alphaFloat 值减少，现象偏向透明, 参数为正数alphaFloat 值增加，现象偏不透明
- * \~chinese \param base基础色
- * \~chinese \param hueFloat 色调
- * \~chinese \param saturationFloat 饱和度
- * \~chinese \param lightnessFloat 亮度
- * \~chinese \param redFloat 红色
- * \~chinese \param greenFloat 绿色
- * \~chinese \param blueFloat 蓝色
- * \~chinese \param alphaFloat Alpha通道(透明度)
- * \~chinese \return 经过调整的颜色
+  \brief 调整颜色.
+
+  \note 取值范围均为 -100 ~ 100 ,当三原色参数为-100时，颜色为黑色，参数为100时，颜色为白色.
+  以透明度( alphaFloat )为例,当参数为负数时基础色的 alphaFloat 值减少，现象偏向透明, 参数为正数alphaFloat 值增加，现象偏不透明
+  \param base 基础色
+  \param hueFloat 色调
+  \param saturationFloat 饱和度
+  \param lightnessFloat 亮度
+  \param redFloat 红色
+  \param greenFloat 绿色
+  \param blueFloat 蓝色
+  \param alphaFloat Alpha通道(透明度)
+  \return 经过调整的颜色
  */
 QColor DGuiApplicationHelper::adjustColor(const QColor &base,
                                           qint8 hueFloat, qint8 saturationFloat, qint8 lightnessFloat,
@@ -618,10 +472,50 @@ QColor DGuiApplicationHelper::adjustColor(const QColor &base,
 }
 
 /*!
- * \~chinese \brief DGuiApplicationHelper::blendColor 将两种颜色混合，合成新的颜色
- * \~chinese \param substrate底层颜色
- * \~chinese \param superstratum上层颜色
- * \~chinese \return 混合颜色
+  \brief 调整图片整体像素颜色.
+
+  \note 取值范围均为 -100 ~ 100 ,当三原色参数为-100时，颜色为黑色，参数为100时，颜色为白色.
+  以透明度( alphaFloat )为例,当参数为负数时基础色的 alphaFloat 值减少，现象偏向透明, 参数为正数alphaFloat 值增加，现象偏不透明
+  \param base 基础色
+  \param hueFloat 色调
+  \param saturationFloat 饱和度
+  \param lightnessFloat 亮度
+  \param redFloat 红色
+  \param greenFloat 绿色
+  \param blueFloat 蓝色
+  \param alphaFloat Alpha通道(透明度)
+  \return 经过调整的图片
+ */
+QImage DGuiApplicationHelper::adjustColor(const QImage &base, qint8 hueFloat, qint8 saturationFloat, qint8 lightnessFloat, qint8 redFloat, qint8 greenFloat, qint8 blueFloat, qint8 alphaFloat)
+{
+    if (base.isNull())
+        return base;
+
+    if (!hueFloat && !saturationFloat && !lightnessFloat && !redFloat
+            && !greenFloat && !blueFloat && !alphaFloat)
+        return base;
+
+    QImage dest = base;
+    for (int y = 0; y < dest.height(); ++y) {
+        const QRgb *rgb = reinterpret_cast<const QRgb *>(base.scanLine(y));
+        for (int x = 0; x < dest.width(); ++x) {
+            QColor base = QColor::fromRgba(rgb[x]);
+            if (base.alpha() == 0)
+                continue;
+            QColor color = adjustColor(base, hueFloat, saturationFloat, lightnessFloat,
+                                       redFloat, greenFloat, blueFloat, alphaFloat);
+            dest.setPixel(x, y, color.rgba());
+        }
+    }
+    return dest;
+}
+
+/*!
+  \brief 将两种颜色混合，合成新的颜色.
+
+  \param substrate 底层颜色
+  \param superstratum 上层颜色
+  \return 混合颜色
  */
 QColor DGuiApplicationHelper::blendColor(const QColor &substrate, const QColor &superstratum)
 {
@@ -706,7 +600,7 @@ static QColor dark_dpalette[DPalette::NColorTypes] {
     QColor(255, 255, 255, 255 * 0.05),  //ItemBackground
     QColor("#C0C6D4"),                  //TextTitle
     QColor("#6D7C88"),                  //TextTips
-    QColor("#9a2f2f"),                  //TextWarning
+    QColor("#E43F2E"),                  //TextWarning
     Qt::white,                          //TextLively
     QColor("#0059d2"),                  //LightLively
     QColor("#0059d2"),                  //DarkLively
@@ -717,9 +611,10 @@ static QColor dark_dpalette[DPalette::NColorTypes] {
 };
 
 /*!
- * \~chinese \brief DGuiApplicationHelper::standardPalett 根据主题获取标准调色板
- * \~chinese \param type 主题枚举值
- * \~chinese \return 调色板
+  \brief 根据主题获取标准调色板.
+
+  \param type 主题枚举值
+  \return 调色板
  */
 DPalette DGuiApplicationHelper::standardPalette(DGuiApplicationHelper::ColorType type)
 {
@@ -884,10 +779,12 @@ static void generatePaletteColor_helper(DPalette &base, M role, DGuiApplicationH
 }
 
 /*!
- * \~chinese \brief DGuiApplicationHelper::generatePaletteColor 获取调色板颜色
- * \~chinese \param base调色板
- * \~chinese \param \sa roleQPalette::ColorRole()
- * \~chinese \param type主题枚举值
+  \brief 获取调色板颜色.
+
+  \param base 调色板
+  \param role 色码
+  \param type 主题枚举值
+  \sa QPalette::ColorRole
  */
 void DGuiApplicationHelper::generatePaletteColor(DPalette &base, QPalette::ColorRole role, DGuiApplicationHelper::ColorType type)
 {
@@ -909,17 +806,20 @@ void DGuiApplicationHelper::generatePaletteColor(DPalette &base, QPalette::Color
 }
 
 /*!
- * \~chinese \brief DGuiApplicationHelper::generatePaletteColor
- * \~chinese 加工调色板的颜色. 一般我们只会为调色板的 \a QPalette::Normal 组设置颜色值, 但是
- * \~chinese 控件中也需要使用其他组的颜色, 此函数使用一些固定规则为 \a base 填充 \a QPalette::Disabled
- * \~chinese 和 \a QPalette::Inactive 分组的颜色. 不同的颜色类型会使用不同的加工规则, 如果为 \a LightType
- * \~chinese 类型, 则将颜色的alpha通道调整为 0.6 后作为 \a QPalette::Disabled 类的颜色使用, 调整为 0.4 后
- * \~chinese 作为 \a QPalette::Inactive 类的颜色使用. 如果为 \a DarkType 类型, 则将颜色的alpha通道调整为
- * \~chinese 0.7 后作为 \a QPalette::Disabled 类的颜色使用, 调整为 0.6 后作为 \a QPalette::Inactive
- * \~chinese 类的颜色使用.
- * \~chinese \param base 被加工的调色板
- * \~chinese \param role 加工的项
- * \~chinese \param type 加工时所使用的颜色类型, 如果值为 UnknownType 将使用 \a toColorType 获取颜色类型
+  \brief 加工调色板的颜色.
+  \overload
+
+   一般我们只会为调色板的 QPalette::Normal 组设置颜色值, 但是
+  控件中也需要使用其他组的颜色, 此函数使用一些固定规则为 \a base 填充 QPalette::Disabled
+  和 QPalette::Inactive 分组的颜色. 不同的颜色类型会使用不同的加工规则, 如果为 LightType
+  类型, 则将颜色的alpha通道调整为 0.6 后作为 QPalette::Disabled 类的颜色使用, 调整为 0.4 后
+  作为 QPalette::Inactive 类的颜色使用. 如果为 DarkType 类型, 则将颜色的alpha通道调整为
+  0.7 后作为 QPalette::Disabled 类的颜色使用, 调整为 0.6 后作为 QPalette::Inactive
+  类的颜色使用.
+
+  \param base 被加工的调色板
+  \param role 加工的项
+  \param type 加工时所使用的颜色类型, 如果值为 UnknownType 将使用 toColorType 获取颜色类型
  */
 void DGuiApplicationHelper::generatePaletteColor(DPalette &base, DPalette::ColorType role, DGuiApplicationHelper::ColorType type)
 {
@@ -927,11 +827,14 @@ void DGuiApplicationHelper::generatePaletteColor(DPalette &base, DPalette::Color
 }
 
 /*!
- * \~chinese \brief DGuiApplicationHelper::generatePalette
- * \~chinese 加工调色板的颜色. 同 \a generatePaletteColor, 将直接调用 \a generatePaletteColor 加工
- * \~chinese 所有类型的调色板颜色.
- * \~chinese \param base 被加工的调色板
- * \~chinese \param type 加工时所使用的颜色类型, 如果值为 UnknownType 将使用 \a toColorType 获取颜色类型
+  \brief 加工调色板的颜色.
+  \overload
+
+  同 generatePaletteColor, 将直接调用 generatePaletteColor 加工
+  所有类型的调色板颜色.
+
+  \param base 被加工的调色板
+  \param type 加工时所使用的颜色类型, 如果值为 UnknownType 将使用 toColorType 获取颜色类型
  */
 void DGuiApplicationHelper::generatePalette(DPalette &base, ColorType type)
 {
@@ -952,14 +855,16 @@ void DGuiApplicationHelper::generatePalette(DPalette &base, ColorType type)
 }
 
 /*!
- * \~chinese \brief DGuiApplicationHelper::fetchPalette 获取调色板数据.
- * \~chinese 首先根据 DPlatformTheme::themeName 获取主题的颜色类型, 如果名称以
- * \~chinese  "dark" 结尾则认为其颜色类型为 \a DarkType, 否则为 \a LightType.
- * \~chinese 如果主题名称为空, 将使用其父主题的名称( \a DPlatformTheme::fallbackProperty ).
- * \~chinese 根据颜色类型将使用 \a standardPalette 获取基础调色板数据, 在此基础上
- * \~chinese 从 \a DPlatformTheme::fetchPalette 获取最终的调色板.
- * \~chinese \param theme 平台主题对象
- * \~chinese \return 调色板数据
+  \brief 获取调色板数据.
+
+  首先根据 DPlatformTheme::themeName 获取主题的颜色类型, 如果名称以
+   "dark" 结尾则认为其颜色类型为 DarkType, 否则为 LightType.
+  如果主题名称为空, 将使用其父主题的名称( DPlatformTheme::fallbackProperty ).
+  根据颜色类型将使用 standardPalette 获取基础调色板数据, 在此基础上
+  从 DPlatformTheme::fetchPalette 获取最终的调色板.
+
+  \param theme 平台主题对象
+  \return 调色板数据
  */
 DPalette DGuiApplicationHelper::fetchPalette(const DPlatformTheme *theme)
 {
@@ -993,9 +898,10 @@ DPalette DGuiApplicationHelper::fetchPalette(const DPlatformTheme *theme)
 }
 
 /*!
- * \~chinese \brief DGuiApplicationHelper::setUseInactiveColorGroup设置是否将调色板的颜色改为半透明模式
- * \~chinese 一般用在主窗口背景为透明、模糊的程序中
- * \~chinese \param on 是否开启
+  \brief 设置是否将调色板的颜色改为半透明模式.
+
+  一般用在主窗口背景为透明、模糊的程序中
+  \param on 是否开启
  */
 void DGuiApplicationHelper::setUseInactiveColorGroup(bool on)
 {
@@ -1003,8 +909,9 @@ void DGuiApplicationHelper::setUseInactiveColorGroup(bool on)
 }
 
 /*!
- * \~chinese \brief DGuiApplicationHelper::setColorCompositingEnabled设置是否开启混合颜色
- * \~chinese \param on 是否开启
+  \brief 设置是否开启混合颜色.
+
+  \param on 是否开启
  */
 void DGuiApplicationHelper::setColorCompositingEnabled(bool on)
 {
@@ -1017,8 +924,9 @@ bool DGuiApplicationHelper::isXWindowPlatform()
 }
 
 /*!
- * \~chinese \brief isTabletEnvironment 用于判断当前桌面环境是否是平板电脑环境
- * \~chinese \return true 是平板电脑环境 false不是平板电脑环境
+  \brief 用于判断当前桌面环境是否是平板电脑环境.
+
+  \return true 是平板电脑环境 false不是平板电脑环境
  */
 bool DGuiApplicationHelper::isTabletEnvironment()
 {
@@ -1026,11 +934,21 @@ bool DGuiApplicationHelper::isTabletEnvironment()
 }
 
 /*!
- * \~chinese \brief DGuiApplicationHelper::systemTheme
- * \~chinese 返回系统级别的主题, 优先级低于 \a applicationTheme
- * \~chinese \return 平台主题对象
- * \~chinese \sa applicationTheme
- * \~chinese \sa windowTheme
+   \brief isAnimationEnvironment 用于判断当前桌面环境是否是开启了动画等特效的环境
+   \return true开启了 false没有开启
+ */
+bool DGuiApplicationHelper::isSpecialEffectsEnvironment()
+{
+    return DGuiApplicationHelper::testAttribute(Attribute::IsSpecialEffectsEnvironment);
+}
+
+/*!
+  \brief DGuiApplicationHelper::systemTheme.
+
+  返回系统级别的主题, 优先级低于 applicationTheme
+  \return 平台主题对象
+  \sa applicationTheme
+  \sa windowTheme
  */
 DPlatformTheme *DGuiApplicationHelper::systemTheme() const
 {
@@ -1040,11 +958,12 @@ DPlatformTheme *DGuiApplicationHelper::systemTheme() const
 }
 
 /*!
- * \~chinese \brief DGuiApplicationHelper::applicationTheme
- * \~chinese 同 systemTheme
- * \~chinese \return 平台主题对象
- * \~chinese \sa systemTheme
- * \~chinese \sa windowTheme
+  \brief DGuiApplicationHelper::applicationTheme.
+
+  同 systemTheme
+  \return 平台主题对象
+  \sa systemTheme
+  \sa windowTheme
  */
 DPlatformTheme *DGuiApplicationHelper::applicationTheme() const
 {
@@ -1060,13 +979,12 @@ DPlatformTheme *DGuiApplicationHelper::applicationTheme() const
 }
 
 /*!
- * \~chinese \brief DGuiApplicationHelper::windowTheme
- * \~chinese 返回窗口级别的主题, 优先级高于 \a windowTheme 和 \a systemTheme
- * \~chinese \param window 主题对象对应的窗口
- * \~chinese \return 平台主题对象
- * \~chinese \sa applicationTheme
- * \~chinese \sa windowTheme
- * \~chinese \warning 已废弃, 不再对外暴露为特定窗口设置主题的接口
+  \brief 返回窗口级别的主题, 优先级高于 windowTheme 和 systemTheme.
+
+  \param window 主题对象对应的窗口
+  \return 平台主题对象
+  \sa applicationTheme()
+  \warning 已废弃, 不再对外暴露为特定窗口设置主题的接口
  */
 DPlatformTheme *DGuiApplicationHelper::windowTheme(QWindow *window) const
 {
@@ -1083,18 +1001,19 @@ DPlatformTheme *DGuiApplicationHelper::windowTheme(QWindow *window) const
 }
 
 /*!
- * \~chinese \brief DGuiApplicationHelper::applicationPalette返回应用程序调色板
- * \~chinese 如果使用 \a setApplicationPalette 设置过一个有效的调色板, 将直接返回保存的调色板. 否则
- * \~chinese 先计算调色板的ColorType, 再使用这个颜色类型通过 \a standardPalette 获取标准调色板. 计算
- * \~chinese ColorType的数据来源按优先级从高到低排列有以下几种方式:
- * \~chinese 1. 如果使用 \a setThemeType 设置过一个有效的颜色类型, 将直接使用 \a themeType 的值.
- * \~chinese 2. 如果为QGuiApplication设置过调色板(表现为 QGuiApplication::testAttribute(Qt::AA_SetPalette)
- * \~chinese 为true), 则将使用 QGuiApplication::palette 通过 \a toColorType 获取颜色类型.
- * \~chinese 3. 将根据 \a applicationTheme 的 DPlatformTheme::themeName 计算颜色类型.
- * \~chinese 如果ColorType来源自第2种方式, 则会直接使用 QGuiApplication::palette 覆盖标准调色板中的
- * \~chinese QPalette 部分, 且程序不会再跟随系统的活动色自动更新调色板.
- * \~chinese \warning 不应该在DTK程序中使用QGuiApplication/QApplication::setPalette
- * \~chinese \return 应用程序调色板
+  \brief 返回应用程序调色板.
+
+  如果使用 setApplicationPalette 设置过一个有效的调色板, 将直接返回保存的调色板. 否则
+  先计算调色板的ColorType, 再使用这个颜色类型通过 standardPalette 获取标准调色板. 计算
+  ColorType的数据来源按优先级从高到低排列有以下几种方式:
+  1. 如果使用 setThemeType 设置过一个有效的颜色类型, 将直接使用 themeType 的值.
+  2. 如果为QGuiApplication设置过调色板(表现为 QGuiApplication::testAttribute(Qt::AA_SetPalette)
+  为true), 则将使用 QGuiApplication::palette 通过 toColorType 获取颜色类型.
+  3. 将根据 applicationTheme 的 DPlatformTheme::themeName 计算颜色类型.
+  如果ColorType来源自第2种方式, 则会直接使用 QGuiApplication::palette 覆盖标准调色板中的
+  QPalette 部分, 且程序不会再跟随系统的活动色自动更新调色板.
+  \warning 不应该在DTK程序中使用QGuiApplication/QApplication::setPalette
+  \return 应用程序调色板
  */
 DPalette DGuiApplicationHelper::applicationPalette() const
 {
@@ -1140,16 +1059,17 @@ DPalette DGuiApplicationHelper::applicationPalette() const
 }
 
 /*!
- * \~chinese \brief DGuiApplicationHelper::setApplicationPalette
- * \~chinese 自定义应用程序调色板, 如果没有为 QGuiApplication 设置过 QPalette, 则
- * \~chinese 将触发 \a QGuiApplication::palette 的更新. 如果仅需要控制程序使用亮色还是暗色的
- * \~chinese 调色板, 请使用 setThemeType.
- * \~chinese \note 主动设置调色板的操作会导致程序不再使用 DPlatformTheme 中调色板相关的数据, 也
- * \~chinese 包括窗口级别的 \a windowTheme 所对应的 DPlatformTheme, 届时设置 DPlatformTheme
- * \~chinese 的 themeName 和所有与 palette 相关的属性都不再生效.
- * \~chinese \warning 使用此方式设置的调色板将不会自动跟随活动色的变化
- * \~chinese \warning 如果使用过QGuiApplication::setPalette, 此方式可能不会生效
- * \~chinese \param palette 要设置的调色板
+  \brief DGuiApplicationHelper::setApplicationPalette.
+
+  自定义应用程序调色板, 如果没有为 QGuiApplication 设置过 QPalette, 则
+  将触发 QGuiApplication::palette 的更新. 如果仅需要控制程序使用亮色还是暗色的
+  调色板, 请使用 setThemeType.
+  \note 主动设置调色板的操作会导致程序不再使用 DPlatformTheme 中调色板相关的数据, 也
+  包括窗口级别的 windowTheme 所对应的 DPlatformTheme, 届时设置 DPlatformTheme
+  的 themeName 和所有与 \a palette 相关的属性都不再生效.
+  \warning 使用此方式设置的调色板将不会自动跟随活动色的变化
+  \warning 如果使用过QGuiApplication::setPalette, 此方式可能不会生效
+  \param palette 要设置的调色板
  */
 void DGuiApplicationHelper::setApplicationPalette(const DPalette &palette)
 {
@@ -1176,22 +1096,19 @@ void DGuiApplicationHelper::setApplicationPalette(const DPalette &palette)
 }
 
 /*!
- * \~chinese \brief DGuiApplicationHelper::windowPalette
- * \~chinese 返回窗口所对应的调色板数据, 同 \a applicationPalette, 如果程序中自定义了
- * \~chinese 调色板, 则直接使用 \a applicationPalette. 自定义调色板的三种方式如下:
- * \~chinese 1. 通过 \a setApplicationPalette 固定调色板
- * \~chinese 2. 通过 \a setThemeType 固定调色板的类型
- * \~chinese 3. 通过 \a QGuiApplication::setPalette 固定调色板, 需要注意此方法不可逆.
- * \~chinese 否则将基于窗口所对应的 \a DPlatformTheme 获取调色板(\sa fetchPalette).
- * \~chinese \param window
- * \~chinese \return 调色板
- * \~chinese \sa windowTheme
- * \~chinese \sa fetchPalette
- * \~chinese \sa standardPalette
- * \~chinese \sa generatePalette
- * \~chinese \sa applicationPalette
- * \~chinese \warning 使用时要同时关注 \a paletteChanged, 收到此信号后可能需要重新获取窗口的调色板
- * \~chinese \warning 已废弃, 不再对外暴露控制窗口级别调色板的接口
+  \brief DGuiApplicationHelper::windowPalette.
+
+  返回窗口所对应的调色板数据, 同 applicationPalette, 如果程序中自定义了
+  调色板, 则直接使用 applicationPalette. 自定义调色板的三种方式如下:
+  1. 通过 setApplicationPalette 固定调色板
+  2. 通过 setThemeType 固定调色板的类型
+  3. 通过 QGuiApplication::setPalette 固定调色板, 需要注意此方法不可逆.
+  否则将基于窗口所对应的 DPlatformTheme 获取调色板( fetchPalette).
+  \param window
+  \return 调色板
+  \sa windowTheme(), fetchPalette(), standardPalette(), generatePalette(), applicationPalette()
+  \warning 使用时要同时关注 applicationPaletteChanged() , 收到此信号后可能需要重新获取窗口的调色板
+  \warning 已废弃, 不再对外暴露控制窗口级别调色板的接口
  */
 DPalette DGuiApplicationHelper::windowPalette(QWindow *window) const
 {
@@ -1212,10 +1129,11 @@ DPalette DGuiApplicationHelper::windowPalette(QWindow *window) const
 }
 
 /*!
- * \~chinese \brief DGuiApplicationHelper::fontManager
- * \~chinese 程序中唯一的DFontManager对象, 会根据程序的fontChanged信号
- * \~chinese 更新 DFontManager::baseFontPixelSize
- * \~chinese \warning 请不要尝试更改它的 baseFontPixelSize 属性
+  \brief DGuiApplicationHelper::fontManager.
+
+  程序中唯一的DFontManager对象, 会根据程序的fontChanged信号
+  更新 DFontManager::baseFontPixelSize
+  \warning 请不要尝试更改它的 baseFontPixelSize 属性
  */
 const DFontManager *DGuiApplicationHelper::fontManager() const
 {
@@ -1228,11 +1146,12 @@ const DFontManager *DGuiApplicationHelper::fontManager() const
 }
 
 /*!
- * \~chinese \brief DGuiApplicationHelper::toColorType 获取颜色的明亮度，将其转换为主题类型的枚举值。
- * \~chinese 转换的策略为：先将颜色转换为rgb格式，再根据 Y = 0.299R + 0.587G + 0.114B 的公式
- * \~chinese 计算出颜色的亮度，亮度大于 191 时认为其为浅色，否则认为其为深色。
- * \~chinese \param color 需要转换为主题的类型的颜色
- * \~chinese \return 颜色类型的枚举值
+  \brief 获取颜色的明亮度，将其转换为主题类型的枚举值.
+
+  转换的策略为：先将颜色转换为rgb格式，再根据 Y = 0.299R + 0.587G + 0.114B 的公式
+  计算出颜色的亮度，亮度大于 191 时认为其为浅色，否则认为其为深色。
+  \param color 需要转换为主题的类型的颜色
+  \return 颜色类型的枚举值
  */
 DGuiApplicationHelper::ColorType DGuiApplicationHelper::toColorType(const QColor &color)
 {
@@ -1251,11 +1170,14 @@ DGuiApplicationHelper::ColorType DGuiApplicationHelper::toColorType(const QColor
 }
 
 /*!
- * \~chinese \brief DGuiApplicationHelper::toColorType
- * \~chinese 使用 QPalette::background 获取颜色的明亮度，将其转换为主题类型的枚举值。
- * \~chinese \row 返回调色板的颜色类型
- * \~chinese \param palette调色板
- * \~chinese \return 颜色类型的枚举值
+  \brief 将调色板 \a palette 转换为主题类型的枚举.
+  \overload
+
+  使用 QPalette::background 获取颜色的明亮度，将其转换为主题类型的枚举值。
+  返回调色板的颜色类型
+
+  \param palette 调色板
+  \return 颜色类型的枚举值
  */
 DGuiApplicationHelper::ColorType DGuiApplicationHelper::toColorType(const QPalette &palette)
 {
@@ -1263,13 +1185,15 @@ DGuiApplicationHelper::ColorType DGuiApplicationHelper::toColorType(const QPalet
 }
 
 /*!
- * \~chinese \brief DGuiApplicationHelper::themeType
- * \~chinese \row 返回程序的主题类型, 当themeType为UnknownType时, 将自动根据
- * \~chinese GuiApplication::palette的QPalette::background颜色计算主题
- * \~chinese 类型, 否则与 \a paletteType 的值一致. 程序中应当使用此值作为
- * \~chinese 暗色/亮色主题类型的判断.
- * \~chinese \return 主题的颜色类型
- * \~chinese \sa toColorType
+  \brief 返回程序的主题类型.
+
+  当themeType为UnknownType时, 将自动根据
+  GuiApplication::palette的QPalette::background颜色计算主题
+  类型, 否则与 paletteType 的值一致. 程序中应当使用此值作为
+  暗色/亮色主题类型的判断.
+
+  \return 主题的颜色类型.
+  \sa toColorType
  */
 DGuiApplicationHelper::ColorType DGuiApplicationHelper::themeType() const
 {
@@ -1283,10 +1207,13 @@ DGuiApplicationHelper::ColorType DGuiApplicationHelper::themeType() const
 }
 
 /*!
- * \~chinese \brief DGuiApplicationHelper::paletteType
- * \~chinese 返回当前已设置的调色板类型，如果未调用过 setPaletteType, 默认为 UnknownType.
- * \~chinese \warning 与 themetype 不同，此值与程序当前的 QPalette 没有关系。
- * \~chinese \sa DGuiApplicationHelper::themeType
+  \brief 返回当前已设置的调色板类型.
+
+  如果未调用过 setPaletteType, 默认为 UnknownType.
+
+  \return 返回当前已设置的调色板类型.
+  \warning 与 themetype 不同，此值与程序当前的 QPalette 没有关系。
+  \sa DGuiApplicationHelper::themeType
  */
 DGuiApplicationHelper::ColorType DGuiApplicationHelper::paletteType() const
 {
@@ -1295,12 +1222,13 @@ DGuiApplicationHelper::ColorType DGuiApplicationHelper::paletteType() const
 }
 
 /*!
- * \~chinese \brief DGuiApplicationHelper::setSingleInstance 设置DGuiApplicationHelper实例
- * \~chinese \param key 实例关键字
- * \~chinese \param singleScope 实例使用范围
- * \~chinese \return 设置是否成功
- * \~chinese \note 此处所用到DGuiApplicationHelperPrivate::waitTime默认值为3000ms，可通过
- * \~chinese \note DGuiApplicationHelper::setSingleInstanceInterval设置
+  \brief 设置DGuiApplicationHelper实例.
+
+  \param key 实例关键字
+  \param singleScope 实例使用范围
+  \return 设置是否成功
+  \note 此处所用到DGuiApplicationHelperPrivate::waitTime默认值为3000ms，可通过
+  \note DGuiApplicationHelper::setSingleInstanceInterval设置
  */
 bool DGuiApplicationHelper::setSingleInstance(const QString &key, DGuiApplicationHelper::SingleScope singleScope)
 {
@@ -1331,41 +1259,58 @@ bool DGuiApplicationHelper::setSingleInstance(const QString &key, DGuiApplicatio
     }
 
     socket_key += key;
-
-#ifdef Q_OS_LINUX
-    if (!DInstanceGuard::guard(socket_key)) {
-        return false;
+    QString lockfile = socket_key;
+    if (!lockfile.startsWith(QLatin1Char('/'))) {
+        lockfile = QDir::cleanPath(QDir::tempPath());
+        lockfile += QLatin1Char('/') + socket_key;
     }
-    DInstanceGuard::DCriticalHolder holder;
-#endif
+    lockfile += QStringLiteral(".lock");
+    static QScopedPointer <QLockFile> lock(new QLockFile(lockfile));
+    // 同一个进程多次调用本接口使用最后一次设置的 key
+    // FIX dcc 使用不同的 key 两次调用 setSingleInstance 后无法启动的问题
+    qint64 pid = -1;
+    QString hostname, appname;
+    if (lock->isLocked() && lock->getLockInfo(&pid, &hostname, &appname) && pid == getpid()) {
+        qCWarning(dgAppHelper) << "call setSingleInstance again within the same process";
+        lock->unlock();
+        lock.reset(new QLockFile(lockfile));
+    }
 
-    // 通知别的实例
-    QLocalSocket socket;
-    socket.connectToServer(socket_key);
+    if (!lock->tryLock()) {
+        qCDebug(dgAppHelper) <<  "===> new client <===" << getpid();
+        // 通知别的实例
+        QLocalSocket socket;
+        socket.connectToServer(socket_key);
 
-    // 等待到有效数据时认为server实例有效
-    if (socket.waitForConnected(DGuiApplicationHelperPrivate::waitTime) && socket.waitForReadyRead(DGuiApplicationHelperPrivate::waitTime)) {
-        // 读取数据
-        qint8 version;
-        qint64 pid;
-        QStringList arguments;
+        // 等待到有效数据时认为server实例有效
+        if (socket.waitForConnected(DGuiApplicationHelperPrivate::waitTime) &&
+                socket.waitForReadyRead(DGuiApplicationHelperPrivate::waitTime)) {
+            // 读取数据
+            qint8 version;
+            qint64 pid;
+            QStringList arguments;
 
-        QDataStream ds(&socket);
-        ds >> version >> pid >> arguments;
-        qInfo() << "Process is started: pid=" << pid << "arguments=" << arguments;
+            QDataStream ds(&socket);
+            ds >> version >> pid >> arguments;
+            qCInfo(dgAppHelper) << "Process is started: pid=" << pid << "arguments=" << arguments;
 
-        // 把自己的信息告诉第一个实例
-        ds << _d_singleServerVersion << qApp->applicationPid() << qApp->arguments();
-        socket.flush();
+            // 把自己的信息告诉第一个实例
+            ds << _d_singleServerVersion << qApp->applicationPid() << qApp->arguments();
+            socket.flush();
+        }
 
         return false;
     }
 
     if (!_d_singleServer->listen(socket_key)) {
+        qCWarning(dgAppHelper) << "listen failed:" <<  _d_singleServer->errorString();
         return false;
+    } else {
+        qCDebug(dgAppHelper) << "===> listen <===" << _d_singleServer->serverName() << getpid();
     }
 
     if (new_server) {
+        qCDebug(dgAppHelper) << "===> new server <===" << _d_singleServer->serverName() << getpid();
         QObject::connect(_d_singleServer, &QLocalServer::newConnection, qApp, [] {
             QLocalSocket *instance = _d_singleServer->nextPendingConnection();
             // 先发送数据告诉新的实例自己收到了它的请求
@@ -1385,7 +1330,7 @@ bool DGuiApplicationHelper::setSingleInstance(const QString &key, DGuiApplicatio
                 ds >> version >> pid >> arguments;
                 instance->close();
 
-                qInfo() << "New instance: pid=" << pid << "arguments=" << arguments;
+                qCInfo(dgAppHelper) << "New instance: pid=" << pid << "arguments=" << arguments;
 
                 // 通知新进程的信息
                 if (_globalHelper.exists() && _globalHelper->m_helper.load())
@@ -1400,10 +1345,11 @@ bool DGuiApplicationHelper::setSingleInstance(const QString &key, DGuiApplicatio
 }
 
 /*!
- * \~chinese \brief DGuiApplicationHelper::setSingelInstanceInterval设置从QLocalServer获取消息的等待时间，
- * \~chinese \brief 用于在重新创建DGuiApplicationHelper单例时，检测DGuiApplicationHelper单例是否存在且有响应
- * \~chinese \param interval等待时间，如 interval 为 -1 则没有超时一直等待，默认和 QLocalSocket 一致 3000ms
- * \~chinese \note 需要在 DGuiApplicationHelper::setSingleInstance 之前调用否则无效。
+  \brief 设置从QLocalServer获取消息的等待时间.
+
+  用于在重新创建DGuiApplicationHelper单例时，检测DGuiApplicationHelper单例是否存在且有响应
+  \param interval 等待时间，如 \a interval 为 -1 则没有超时一直等待，默认和 QLocalSocket 一致 3000ms
+  \note 需要在 DGuiApplicationHelper::setSingleInstance 之前调用否则无效。
  */
 void DGuiApplicationHelper::setSingleInstanceInterval(int interval)
 {
@@ -1412,12 +1358,136 @@ void DGuiApplicationHelper::setSingleInstanceInterval(int interval)
 }
 
 /*!
- * \~chinese \brief DGuiApplicationHelper::setSingelInstanceInterval设置从QLocalServer获取消息的等待时间
- * \~chinese \param interval等待时间， typo 请使用 DGuiApplicationHelper::setSingleInstanceInterval
+  \brief 设置从QLocalServer获取消息的等待时间.
+
+  \param interval 等待时间，typo 请使用 DGuiApplicationHelper::setSingleInstanceInterval
  */
 void DGuiApplicationHelper::setSingelInstanceInterval(int interval)
 {
     DGuiApplicationHelperPrivate::waitTime = interval;
+}
+
+/*!
+ * \brief Determine whether it's a user manual for this application.
+ * \return
+ */
+bool DGuiApplicationHelper::hasUserManual() const
+{
+#ifdef Q_OS_LINUX
+    static qint8 hasManual = -1;
+    if (hasManual >= 0)
+        return hasManual;
+
+    auto loadManualFromLocalFile = [=]() -> bool {
+        const QString appName = qApp->applicationName();
+        bool dmanBinaryExists = false;
+        bool dmanDataExists = false;
+        const QString sysPath = qgetenv("PATH");
+        auto binPath = sysPath.split(":");
+        for (const auto &path : binPath) {
+            if (QFile::exists(QStringList {path, "dman"}.join(QDir::separator()))) {
+                dmanBinaryExists = true;
+                break;
+            }
+        }
+
+        // search all subdirectories
+        const QString xdgDataPath = qgetenv("XDG_DATA_DIRS");
+        auto dataPath = xdgDataPath.split(":");
+        for (const auto &path : dataPath) {
+            QString strManualPath = QStringList {path, "deepin-manual"}.join(QDir::separator());
+
+            QDirIterator it(strManualPath, QDirIterator::Subdirectories);
+            while (it.hasNext()) {
+                QFileInfo file(it.next());
+                if (file.isDir() && file.fileName().contains(appName, Qt::CaseInsensitive)) {
+                    dmanDataExists = true;
+                    break;
+                }
+
+                if (file.isDir())
+                    continue;
+            }
+        }
+
+        return  dmanBinaryExists && dmanDataExists;
+    };
+
+    QDBusConnection conn = QDBusConnection::sessionBus();
+    if (conn.isConnected()) {
+        QDBusInterface manualSearch("com.deepin.Manual.Search",
+                                    "/com/deepin/Manual/Search",
+                                    "com.deepin.Manual.Search");
+        if (manualSearch.isValid()) {
+            QDBusPendingCall call = manualSearch.asyncCall("ManualExists", qApp->applicationName());
+            QDBusPendingCallWatcher *watcher = new QDBusPendingCallWatcher(call, const_cast<DGuiApplicationHelper *>(this));
+            QObject::connect(watcher, &QDBusPendingCallWatcher::finished, this, [](QDBusPendingCallWatcher *pWatcher) {
+                QDBusPendingReply<bool> reply = *pWatcher;
+                if (reply.isError()) {
+                    qWarning() << reply.error();
+                } else {
+                    hasManual = reply.value();
+                }
+
+                pWatcher->deleteLater();
+            });
+        } else {
+            return hasManual = loadManualFromLocalFile();
+        }
+    } else {
+        static LoadManualServiceWorker *manualWorker = new LoadManualServiceWorker;
+        manualWorker->checkManualServiceWakeUp();
+
+        return hasManual = loadManualFromLocalFile();
+    }
+#else
+    return false;
+#endif
+}
+
+bool DGuiApplicationHelper::loadTranslator(const QString &fileName, const QList<QString> &translateDirs, const QList<QLocale> &localeFallback)
+{
+    DCORE_USE_NAMESPACE;
+
+    QList<QString> dirs = translateDirs;
+    const QList<DPathBuf> defaultDirPrefix {
+        qApp->applicationDirPath(),
+        QDir::currentPath()
+    };
+    for (auto item : defaultDirPrefix)
+        dirs << item.join("translations").toString();
+
+    QStringList missingQmfiles;
+    for (const auto &locale : localeFallback) {
+        QStringList translateFilenames {QString("%1_%2").arg(fileName).arg(locale.name())};
+        const QStringList parseLocalNameList = locale.name().split("_", QString::SkipEmptyParts);
+        if (parseLocalNameList.length() > 0)
+            translateFilenames << QString("%1_%2").arg(fileName).arg(parseLocalNameList.at(0));
+
+        for (const auto &translateFilename : translateFilenames) {
+            for (const auto &dir : dirs) {
+                DPathBuf path(dir);
+                QString translatePath = (path / translateFilename).toString();
+                if (QFile::exists(translatePath + ".qm")) {
+                    qDebug() << "load translate" << translatePath;
+                    auto translator = new QTranslator(qApp);
+                    translator->load(translatePath);
+                    qApp->installTranslator(translator);
+                    qApp->setProperty("dapp_locale", locale.name());
+                    return true;
+                }
+            }
+
+            // fix english does not need to translation.
+            if (locale.language() != QLocale::English)
+                missingQmfiles << translateFilename + ".qm";
+        }
+    }
+
+    if (missingQmfiles.size() > 0) {
+        qWarning() << fileName << "can not find qm files" << missingQmfiles;
+    }
+    return false;
 }
 
 void DGuiApplicationHelper::setAttribute(DGuiApplicationHelper::Attribute attribute, bool enable)
@@ -1447,14 +1517,18 @@ bool DGuiApplicationHelper::testAttribute(DGuiApplicationHelper::Attribute attri
         return QString(typeid(*QGuiApplicationPrivate::platform_theme).name()).contains("QDeepinTheme");
     case IsDeepinEnvironment:
         return QGuiApplicationPrivate::instance()->platformIntegration()->services()->desktopEnvironment().toLower().contains("deepin");
+    case IsSpecialEffectsEnvironment: {
+        return qgetenv("DTK_DISABLED_SPECIAL_EFFECTS").toInt() != 1;
+    }
     default:
         return DGuiApplicationHelperPrivate::attributes.testFlag(attribute);
     }
 }
 
 /*!
- * \~chinese \brief DGuiApplicationHelper::setThemeType
- * \~chinese 同 setPaletteType， 已废弃，请不要再使用。
+  \brief DGuiApplicationHelper::setThemeType.
+  \deprecated 同 setPaletteType， 已废弃，请不要再使用。
+  \param themeType 主题类型.
  */
 void DGuiApplicationHelper::setThemeType(DGuiApplicationHelper::ColorType themeType)
 {
@@ -1462,14 +1536,15 @@ void DGuiApplicationHelper::setThemeType(DGuiApplicationHelper::ColorType themeT
 }
 
 /*!
- * \~chinese \brief DGuiApplicationHelper::setPaletteType 设置程序所应用的调色板类型。
- * \~chinese 将固定程序的调色板类型, 此行为可能导致 applicationPalette 变化, 前提是未使用
- * \~chinese \a setApplicationPalette 固定过程序的调色板, 此方法不影响程序的调色板跟随
- * \~chinese 活动色改变, 可用于控制程序使用亮色还是暗色调色板.
- * \~chinese \note 主动设置调色板颜色类型的操作会导致程序不再使用 DPlatformTheme 中调色板相关的数据, 也
- * \~chinese 包括窗口级别的 \a windowTheme 所对应的 DPlatformTheme, 届时设置 DPlatformTheme
- * \~chinese 的 themeName 和所有与 palette 相关的属性都不再生效.
- * \~chinese \param paletteType主题类型的枚举值
+  \brief 设置程序所应用的调色板类型.
+
+  将固定程序的调色板类型, 此行为可能导致 applicationPalette 变化, 前提是未使用
+  setApplicationPalette 固定过程序的调色板, 此方法不影响程序的调色板跟随
+  活动色改变, 可用于控制程序使用亮色还是暗色调色板.
+  \note 主动设置调色板颜色类型的操作会导致程序不再使用 DPlatformTheme 中调色板相关的数据, 也
+  包括窗口级别的 windowTheme 所对应的 DPlatformTheme, 届时设置 DPlatformTheme
+  的 themeName 和所有与 palette 相关的属性都不再生效.
+  \param paletteType 主题类型的枚举值
  */
 void DGuiApplicationHelper::setPaletteType(DGuiApplicationHelper::ColorType paletteType)
 {
@@ -1490,6 +1565,59 @@ void DGuiApplicationHelper::setPaletteType(DGuiApplicationHelper::ColorType pale
     Q_EMIT paletteTypeChanged(paletteType);
 }
 
+/*!
+ * \brief Open manual for this application.
+ */
+void DGuiApplicationHelper::handleHelpAction()
+{
+    if (!hasUserManual()) {
+        return;
+    }
+#ifdef Q_OS_LINUX
+    QString appid = qApp->applicationName();
+
+    // new interface use applicationName as id
+    QDBusInterface manual("com.deepin.Manual.Open",
+                          "/com/deepin/Manual/Open",
+                          "com.deepin.Manual.Open");
+    QDBusPendingCall call = manual.asyncCall("ShowManual", appid);
+    QDBusPendingCallWatcher *watcher = new QDBusPendingCallWatcher(call, this);
+    QObject::connect(watcher, &QDBusPendingCallWatcher::finished, this, [appid](QDBusPendingCallWatcher *pWatcher) {
+        QDBusPendingReply<bool> reply = *pWatcher;
+        if (reply.isError()) {
+            // fallback to old interface
+            qWarning() << reply.error() << "fallback to dman appid";
+            QProcess::startDetached("dman", QStringList() << appid);
+        }
+
+        pWatcher->deleteLater();
+    });
+
+#else
+    qWarning() << "not support dman now";
+#endif
+}
+
+void DGuiApplicationHelper::openUrl(const QString &url)
+{
+#ifdef Q_OS_UNIX
+    // workaround for pkexec apps
+    bool ok = false;
+    const int pkexecUid = qEnvironmentVariableIntValue("PKEXEC_UID", &ok);
+
+    if (ok)
+    {
+        EnvReplaceGuard _env_guard(pkexecUid);
+        Q_UNUSED(_env_guard);
+
+        QDesktopServices::openUrl(url);
+    }
+    else
+#endif
+    {
+        QDesktopServices::openUrl(url);
+    }
+}
 DGUI_END_NAMESPACE
 
 #include "moc_dguiapplicationhelper.cpp"

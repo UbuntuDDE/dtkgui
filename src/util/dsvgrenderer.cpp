@@ -1,19 +1,6 @@
-/*
- * Copyright (C) 2017 ~ 2017 Deepin Technology Co., Ltd.
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- */
+// SPDX-FileCopyrightText: 2022 UnionTech Software Technology Co., Ltd.
+//
+// SPDX-License-Identifier: LGPL-3.0-or-later
 
 #include <librsvg/rsvg.h>
 
@@ -25,6 +12,7 @@
 #include <QDebug>
 #include <QGuiApplication>
 #include <QLibrary>
+#include <QXmlStreamReader>
 
 DCORE_USE_NAMESPACE
 
@@ -143,13 +131,15 @@ QImage DSvgRendererPrivate::getImage(const QSize &size, const QString &elementId
 }
 
 /*!
- * \~chinese \class DSvgRenderer
- * \~chinese \brief 提供了将SVG文件的内容绘制到绘制设备上的方法。
- * \~chinese SVG图形可以在构造 DSvgRenderer 时加载，也可以稍后使用load（）函数加载。
- * \~chinese 因为渲染是使用 QPainter 执行的，所以可以在 QPaintDevice 的任何子类上渲染SVG图形。
- * \~chinese 如果加载了有效文件，则无论是在构造时还是以后某个时间，isValid（）都将返回true；否则将返回false。
- * \~chinese DSvgRenderer提供render（）插槽，用于使用给定的 QPainter 渲染当前文档或动画文档的当前帧
- * \~chinese \note 使用 DSvgRenderer 需要 librsvg库
+  \class Dtk::Gui::DSvgRenderer
+  \inmodule dtkgui
+  \brief 提供了将SVG文件的内容绘制到绘制设备上的方法.
+
+  SVG图形可以在构造 DSvgRenderer 时加载，也可以稍后使用load（）函数加载。
+  因为渲染是使用 QPainter 执行的，所以可以在 QPaintDevice 的任何子类上渲染SVG图形。
+  如果加载了有效文件，则无论是在构造时还是以后某个时间，isValid（）都将返回true；否则将返回false。
+  DSvgRenderer提供render（）插槽，用于使用给定的 QPainter 渲染当前文档或动画文档的当前帧
+  \note 使用 DSvgRenderer 需要 librsvg库
  */
 
 DSvgRenderer::DSvgRenderer(QObject *parent)
@@ -261,12 +251,53 @@ QImage DSvgRenderer::toImage(const QSize sz, const QString &elementId) const
     return d->getImage(sz, elementId);
 }
 
+static QByteArray updateXmlAttribute(const QString &contents)
+{
+    QByteArray data;
+    QXmlStreamWriter writer(&data);
+    QXmlStreamReader reader(contents);
+    while(reader.readNext() != QXmlStreamReader::Invalid && !reader.atEnd()) {
+        if (reader.tokenType() != QXmlStreamReader::StartElement ||
+                !reader.attributes().hasAttribute("href")) {
+            writer.writeCurrentToken(reader);
+            continue;
+        }
+
+        for (const auto &nd : reader.namespaceDeclarations())
+            writer.writeNamespace(nd.namespaceUri().toString(), nd.prefix().toString());
+
+        writer.writeStartElement(reader.namespaceUri().toString(), reader.name().toString());
+
+        for (const auto &attr : reader.attributes()) {
+            if (attr.name() == "href") {
+                writer.writeAttribute("xlink:href", attr.value().toString());
+                continue;
+            }
+            writer.writeAttribute(attr);
+        }
+    }
+
+    return data;
+}
+
+QByteArray format(const QByteArray &contents)
+{
+    QXmlStreamReader reader(contents);
+    while (reader.readNextStartElement()) {
+        if (reader.attributes().hasAttribute("href"))
+            return updateXmlAttribute(contents);
+    }
+
+    return contents;
+}
+
 bool DSvgRenderer::load(const QString &filename)
 {
     QFile file(filename);
 
     if (file.open(QIODevice::ReadOnly)) {
-        return load(file.readAll());
+        // TODO: if `href` attribute is adapted after librsvg upgrade revert me
+        return load(format(file.readAll()));
     }
 
     return false;
