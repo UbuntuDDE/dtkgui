@@ -2,18 +2,26 @@ Source: dtkgui
 Section: libs
 Priority: optional
 Maintainer: Debian Deepin Packaging Team <pkg-deepin-devel@lists.alioth.debian.org>
-Uploaders: Boyuan Yang <byang@debian.org>,
-           Arun Kumar Pariyar <openarungeek@gmail.com>,
-           Hu Feng <hufeng@uniontech.com>,
-           Clay Stan <claystan97@gmail.com>
-Build-Depends: debhelper-compat (= 13),
-               libdtkcore-dev (>= 5.5~),
-               libgmock-dev,
-               libgtest-dev,
-               librsvg2-dev,
-               pkg-config,
-               qtbase5-dev-tools,
-               qtbase5-private-dev
+Uploaders:
+ Boyuan Yang <byang@debian.org>,
+ Arun Kumar Pariyar <openarungeek@gmail.com>,
+ Hu Feng <hufeng@uniontech.com>,
+ Clay Stan <claystan97@gmail.com>,
+Build-Depends:
+ cmake,
+ debhelper-compat (= 13),
+ doxygen,
+ graphviz,
+ libdtkcore-dev,
+ libfreeimage-dev,
+ libgmock-dev,
+ libgtest-dev,
+ libqt5xdg-dev,
+ libqt5xdgiconloader-dev,
+ librsvg2-dev,
+ pkg-config,
+ qtbase5-dev-tools,
+ qtbase5-private-dev,
 Rules-Requires-Root: no
 Standards-Version: 4.5.1
 Homepage: https://github.com/linuxdeepin/dtkgui
@@ -23,7 +31,10 @@ Vcs-Browser: https://salsa.debian.org/pkg-deepin-team/dtkgui
 Package: libdtkgui-dev
 Architecture: any
 Section: libdevel
-Depends: libdtkgui5 (= ${binary:Version}), ${misc:Depends}, ${shlibs:Depends}
+Depends:
+ libdtkgui5 (= ${binary:Version}),
+ ${misc:Depends},
+ ${shlibs:Depends},
 Description: Deepin Tool Kit Gui library (development files)
  DtkGui provides the base devel library of Deepin Qt/C++
  applications.
@@ -34,7 +45,10 @@ Description: Deepin Tool Kit Gui library (development files)
 
 Package: libdtkgui5
 Architecture: any
-Depends: libdtkcommon, ${misc:Depends}, ${shlibs:Depends}
+Depends:
+ libdtkcommon,
+ ${misc:Depends},
+ ${shlibs:Depends},
 Multi-Arch: same
 Description: Deepin Tool Kit Gui library
  DtkGui provides the base devel library of Deepin Qt/C++
@@ -47,7 +61,10 @@ Description: Deepin Tool Kit Gui library
 Package: libdtkgui5-bin
 Section: utils
 Architecture: any
-Depends: libdtkgui5 (= ${binary:Version}), ${misc:Depends}, ${shlibs:Depends}
+Depends:
+ libdtkgui5 (= ${binary:Version}),
+ ${misc:Depends},
+ ${shlibs:Depends},
 Description: Deepin Tool Kit Gui utilities
  DtkGui provides the base devel library of Deepin Qt/C++
  applications.

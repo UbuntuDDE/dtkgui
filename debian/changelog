@@ -1,3 +1,9 @@
+dtkgui (5.6.3-1) lunar; urgency=medium
+
+  * New upstream release.
+
+ -- Arun Kumar Pariyar <openarungeek@gmail.com>  Mon, 09 Jan 2023 16:35:55 +0545
+
 dtkgui (5.5.17.1-1) impish; urgency=medium
 
   * New upstream release.

@@ -35,4 +35,4 @@ endif
 	dh $@
 
 override_dh_auto_configure:
-	dh_auto_configure -- LIB_INSTALL_DIR=/usr/lib/$(DEB_HOST_MULTIARCH) VERSION=$(CONFIG_VERSION)
+	dh_auto_configure -- LIB_INSTALL_DIR=/usr/lib/$(DEB_HOST_MULTIARCH) VERSION=$(CONFIG_VERSION) -DBUILD_DOCS=OFF
