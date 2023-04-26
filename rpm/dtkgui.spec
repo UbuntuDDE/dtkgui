@@ -14,7 +14,6 @@ BuildRequires:  qt5-qtx11extras-devel
 BuildRequires:  dtkcommon-devel
 BuildRequires:  dtkcore-devel
 BuildRequires:  librsvg2-devel
-BuildRequires:  libfreeimage-devel
 BuildRequires:  gtest-devel
 BuildRequires:  gcc-c++
 BuildRequires:  annobin

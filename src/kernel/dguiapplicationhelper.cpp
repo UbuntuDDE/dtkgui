@@ -36,6 +36,7 @@
 #include <QLockFile>
 #include <QDirIterator>
 #include <QDesktopServices>
+#include <DStandardPaths>
 
 #ifdef Q_OS_UNIX
 #include <QDBusError>
@@ -180,9 +181,11 @@ Q_GLOBAL_STATIC(_DGuiApplicationHelper, _globalHelper)
 
 int DGuiApplicationHelperPrivate::waitTime = 3000;
 DGuiApplicationHelper::Attributes DGuiApplicationHelperPrivate::attributes = DGuiApplicationHelper::UseInactiveColorGroup;
+static const DGuiApplicationHelper::SizeMode InvalidSizeMode = static_cast<DGuiApplicationHelper::SizeMode>(-1);
 
 DGuiApplicationHelperPrivate::DGuiApplicationHelperPrivate(DGuiApplicationHelper *qq)
     : DObjectPrivate(qq)
+    , explicitSizeMode(InvalidSizeMode)
 {
 
 }
@@ -238,6 +241,9 @@ void DGuiApplicationHelperPrivate::initApplication(QGuiApplication *app)
         // 此时appTheme等价于systemTheme, 可以直接信号链接
         _q_initApplicationTheme();
     }
+
+    systemSizeMode = static_cast<DGuiApplicationHelper::SizeMode>(systemTheme->sizeMode());
+    q->connect(systemTheme, SIGNAL(sizeModeChanged(int)), q, SLOT(_q_sizeModeChanged(int)));
 }
 
 void DGuiApplicationHelperPrivate::staticInitApplication()
@@ -325,6 +331,40 @@ void DGuiApplicationHelperPrivate::notifyAppThemeChanged()
 bool DGuiApplicationHelperPrivate::isCustomPalette() const
 {
     return appPalette || paletteType != DGuiApplicationHelper::UnknownType;
+}
+
+void DGuiApplicationHelperPrivate::_q_sizeModeChanged(int mode)
+{
+    D_Q(DGuiApplicationHelper);
+    qCInfo(dgAppHelper) << "Receiving that system size mode is set to [" << static_cast<DGuiApplicationHelper::SizeMode>(mode)
+                        << "], and old system size mode is [" << systemSizeMode << "]";
+
+    const auto oldSizeMode = fetchSizeMode();
+    systemSizeMode = static_cast<DGuiApplicationHelper::SizeMode>(mode);
+    const auto currentSizeMode = fetchSizeMode();
+    if (oldSizeMode != currentSizeMode)
+        Q_EMIT q->sizeModeChanged(currentSizeMode);
+}
+
+DGuiApplicationHelper::SizeMode DGuiApplicationHelperPrivate::fetchSizeMode(bool *isSystemSizeMode) const
+{
+    if (isSystemSizeMode)
+        *isSystemSizeMode = false;
+    // `setSizeMode` > `D_DTK_SIZEMODE` > `systemSizeMode`
+    if (explicitSizeMode != InvalidSizeMode)
+        return explicitSizeMode;
+
+    static const QString envSizeMode(qEnvironmentVariable("D_DTK_SIZEMODE"));
+    if (!envSizeMode.isEmpty()) {
+        bool ok = false;
+        const auto mode = envSizeMode.toInt(&ok);
+        if (ok)
+            return static_cast<DGuiApplicationHelper::SizeMode>(mode);
+    }
+
+    if (isSystemSizeMode)
+        *isSystemSizeMode = true;
+    return systemSizeMode;
 }
 
 /*!
@@ -428,6 +468,43 @@ DGuiApplicationHelper::~DGuiApplicationHelper()
     _globalHelper->m_helper = nullptr;
 }
 
+static inline QColor adjustHSLColor(const QColor &base, qint8 hueFloat, qint8 saturationFloat,
+                                    qint8 lightnessFloat, qint8 alphaFloat = 0)
+{
+    if (Q_LIKELY(hueFloat || saturationFloat || lightnessFloat || alphaFloat)) {
+        // 按HSL格式调整
+        int H, S, L, A;
+        base.getHsl(&H, &S, &L, &A);
+
+        H = H > 0 ? adjustColorValue(H, hueFloat, 359) : H;
+        S = adjustColorValue(S, saturationFloat);
+        L = adjustColorValue(L, lightnessFloat);
+
+        return QColor::fromHsl(H, S, L, A);
+    }
+
+    return base;
+}
+
+static inline QColor adjustRGBColor(const QColor &base, qint8 redFloat, qint8 greenFloat,
+                                    qint8 blueFloat, qint8 alphaFloat = 0)
+{
+    if (Q_LIKELY(redFloat || greenFloat || blueFloat || alphaFloat)) {
+        // 按RGB格式调整
+        int R, G, B, A;
+        base.getRgb(&R, &G, &B, &A);
+
+        R = adjustColorValue(R, redFloat);
+        G = adjustColorValue(G, greenFloat);
+        B = adjustColorValue(B, blueFloat);
+        A = adjustColorValue(A, alphaFloat);
+
+        return QColor(R, G, B, A);
+    }
+
+    return base;
+}
+
 /*!
   \brief 调整颜色.
 
@@ -447,28 +524,18 @@ QColor DGuiApplicationHelper::adjustColor(const QColor &base,
                                           qint8 hueFloat, qint8 saturationFloat, qint8 lightnessFloat,
                                           qint8 redFloat, qint8 greenFloat, qint8 blueFloat, qint8 alphaFloat)
 {
-    // 按HSL格式调整
-    int H, S, L, A;
-    base.getHsl(&H, &S, &L, &A);
+    if (Q_UNLIKELY(!base.isValid()))
+        return base;
 
-    H = H > 0 ? adjustColorValue(H, hueFloat, 359) : H;
-    S = adjustColorValue(S, saturationFloat);
-    L = adjustColorValue(L, lightnessFloat);
-    A = adjustColorValue(A, alphaFloat);
+    // First do the adjust of spec of this color, Avoid precision loss caused by color spec conversion.
+    if (Q_UNLIKELY(base.spec() == QColor::Hsl)) {
+        QColor newColor = adjustHSLColor(base, hueFloat, saturationFloat, lightnessFloat, alphaFloat);
+        return adjustRGBColor(newColor, redFloat, greenFloat, blueFloat);
+    }
 
-    QColor new_color = QColor::fromHsl(H, S, L, A);
-
-    // 按RGB格式调整
-    int R, G, B;
-    new_color.getRgb(&R, &G, &B);
-
-    R = adjustColorValue(R, redFloat);
-    G = adjustColorValue(G, greenFloat);
-    B = adjustColorValue(B, blueFloat);
-
-    new_color.setRgb(R, G, B, A);
-
-    return new_color;
+    // For other specs, first do RGB adjust
+    QColor newColor = adjustRGBColor(base, redFloat, greenFloat, blueFloat, alphaFloat);
+    return adjustHSLColor(newColor, hueFloat, saturationFloat, lightnessFloat);
 }
 
 /*!
@@ -1367,6 +1434,32 @@ void DGuiApplicationHelper::setSingelInstanceInterval(int interval)
     DGuiApplicationHelperPrivate::waitTime = interval;
 }
 
+static bool hasLocalManualFile()
+{
+    DCORE_USE_NAMESPACE
+    if (QStandardPaths::findExecutable(QLatin1String("dman")).isEmpty())
+        return false;
+
+    // search all subdirectories
+    const QString xdgDataPath = qgetenv("XDG_DATA_DIRS");
+    auto dataPath = xdgDataPath.split(":");
+    // /usr/share /usr/loacal/share ...
+    const auto &dataDirs = DStandardPaths::standardLocations(QStandardPaths::GenericDataLocation);
+    dataPath.append(dataDirs);
+    for (const auto &path : dataPath) {
+        QString strManualPath = QStringList {path, "deepin-manual"}.join(QDir::separator());
+
+        QDirIterator it(strManualPath, QDir::AllDirs | QDir::NoDotAndDotDot,QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            it.next();
+            if (it.fileName().contains(qApp->applicationName(), Qt::CaseInsensitive))
+                return true;
+        }
+    }
+
+    return false;
+}
+
 /*!
  * \brief Determine whether it's a user manual for this application.
  * \return
@@ -1378,68 +1471,35 @@ bool DGuiApplicationHelper::hasUserManual() const
     if (hasManual >= 0)
         return hasManual;
 
-    auto loadManualFromLocalFile = [=]() -> bool {
-        const QString appName = qApp->applicationName();
-        bool dmanBinaryExists = false;
-        bool dmanDataExists = false;
-        const QString sysPath = qgetenv("PATH");
-        auto binPath = sysPath.split(":");
-        for (const auto &path : binPath) {
-            if (QFile::exists(QStringList {path, "dman"}.join(QDir::separator()))) {
-                dmanBinaryExists = true;
-                break;
-            }
-        }
-
-        // search all subdirectories
-        const QString xdgDataPath = qgetenv("XDG_DATA_DIRS");
-        auto dataPath = xdgDataPath.split(":");
-        for (const auto &path : dataPath) {
-            QString strManualPath = QStringList {path, "deepin-manual"}.join(QDir::separator());
-
-            QDirIterator it(strManualPath, QDirIterator::Subdirectories);
-            while (it.hasNext()) {
-                QFileInfo file(it.next());
-                if (file.isDir() && file.fileName().contains(appName, Qt::CaseInsensitive)) {
-                    dmanDataExists = true;
-                    break;
-                }
-
-                if (file.isDir())
-                    continue;
-            }
-        }
-
-        return  dmanBinaryExists && dmanDataExists;
-    };
-
     QDBusConnection conn = QDBusConnection::sessionBus();
-    if (conn.isConnected()) {
-        QDBusInterface manualSearch("com.deepin.Manual.Search",
-                                    "/com/deepin/Manual/Search",
-                                    "com.deepin.Manual.Search");
-        if (manualSearch.isValid()) {
-            QDBusPendingCall call = manualSearch.asyncCall("ManualExists", qApp->applicationName());
-            QDBusPendingCallWatcher *watcher = new QDBusPendingCallWatcher(call, const_cast<DGuiApplicationHelper *>(this));
-            QObject::connect(watcher, &QDBusPendingCallWatcher::finished, this, [](QDBusPendingCallWatcher *pWatcher) {
-                QDBusPendingReply<bool> reply = *pWatcher;
-                if (reply.isError()) {
-                    qWarning() << reply.error();
-                } else {
-                    hasManual = reply.value();
-                }
-
-                pWatcher->deleteLater();
-            });
-        } else {
-            return hasManual = loadManualFromLocalFile();
-        }
-    } else {
+    if (!conn.isConnected()) {
         static LoadManualServiceWorker *manualWorker = new LoadManualServiceWorker;
         manualWorker->checkManualServiceWakeUp();
 
-        return hasManual = loadManualFromLocalFile();
+        // 可能存在 dbus 服务有问题，但是文件存在，这时不更新缓存
+        return /*hasManual = */hasLocalManualFile();
     }
+
+    QDBusInterface manualSearch("com.deepin.Manual.Search",
+                                "/com/deepin/Manual/Search",
+                                "com.deepin.Manual.Search");
+    if (!manualSearch.isValid())
+        return hasManual = hasLocalManualFile();
+
+    QDBusPendingCall call = manualSearch.asyncCall("ManualExists", qApp->applicationName());
+    QDBusPendingCallWatcher *watcher = new QDBusPendingCallWatcher(call, const_cast<DGuiApplicationHelper *>(this));
+    QObject::connect(watcher, &QDBusPendingCallWatcher::finished, this, [](QDBusPendingCallWatcher *pWatcher) {
+        QDBusPendingReply<bool> reply = *pWatcher;
+        if (reply.isError()) {
+            qWarning() << reply.error();
+        } else {
+            hasManual = reply.value();
+        }
+
+        pWatcher->deleteLater();
+    });
+
+    return hasManual >= 0 ? hasManual : false;
 #else
     return false;
 #endif
@@ -1488,6 +1548,32 @@ bool DGuiApplicationHelper::loadTranslator(const QString &fileName, const QList<
         qWarning() << fileName << "can not find qm files" << missingQmfiles;
     }
     return false;
+}
+
+DGuiApplicationHelper::SizeMode DGuiApplicationHelper::sizeMode() const
+{
+    D_DC(DGuiApplicationHelper);
+    return d->fetchSizeMode();
+}
+
+void DGuiApplicationHelper::setSizeMode(const DGuiApplicationHelper::SizeMode mode)
+{
+    D_D(DGuiApplicationHelper);
+    const auto old = d->fetchSizeMode();
+    d->explicitSizeMode = mode;
+    const auto current = d->fetchSizeMode();
+    if (old != current)
+        Q_EMIT sizeModeChanged(current);
+}
+
+void DGuiApplicationHelper::resetSizeMode()
+{
+    D_D(DGuiApplicationHelper);
+    const auto old = d->fetchSizeMode();
+    d->explicitSizeMode = InvalidSizeMode;
+    const auto current = d->fetchSizeMode();
+    if (current != old)
+        Q_EMIT sizeModeChanged(current);
 }
 
 void DGuiApplicationHelper::setAttribute(DGuiApplicationHelper::Attribute attribute, bool enable)
@@ -1583,7 +1669,7 @@ void DGuiApplicationHelper::handleHelpAction()
     QDBusPendingCall call = manual.asyncCall("ShowManual", appid);
     QDBusPendingCallWatcher *watcher = new QDBusPendingCallWatcher(call, this);
     QObject::connect(watcher, &QDBusPendingCallWatcher::finished, this, [appid](QDBusPendingCallWatcher *pWatcher) {
-        QDBusPendingReply<bool> reply = *pWatcher;
+        QDBusPendingReply<void> reply = *pWatcher;
         if (reply.isError()) {
             // fallback to old interface
             qWarning() << reply.error() << "fallback to dman appid";

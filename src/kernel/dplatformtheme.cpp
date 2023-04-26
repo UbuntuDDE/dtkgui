@@ -618,6 +618,31 @@ int DPlatformTheme::dotsPerInch(const QString &screenName) const
     return ok ? dpi : -1;
 }
 
+/*!
+  \property DPlatformTheme::sizeMode
+  \brief This property holds the sizeMode of the system's SizeMode.
+ */
+int DPlatformTheme::sizeMode() const
+{
+    D_DC(DPlatformTheme);
+    QVariant value = d->theme->getSetting(QByteArrayLiteral("DTK/SizeMode"));
+    return value.toInt();
+}
+
+/*!
+  \property DPlatformTheme::scrollBarPolicy
+  \brief This property holds the scrollBarPolicy of the system. same as Qt::ScrollBarPolicy
+  \retval 0 show as needed auto hide, default
+  \retval 1 always off
+  \retval 2 always on
+ */
+int DPlatformTheme::scrollBarPolicy() const
+{
+    FETCH_PROPERTY("Qt/ScrollBarPolicy", scrollBarPolicy)
+
+    return qvariant_cast<int>(value);
+}
+
 void DPlatformTheme::setCursorBlinkTime(int cursorBlinkTime)
 {
     D_D(DPlatformTheme);
