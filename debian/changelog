@@ -1,3 +1,9 @@
+dtkgui (5.6.3-1ubuntu1) lunar; urgency=medium
+
+  * Rebuild.
+
+ -- Arun Kumar Pariyar <openarungeek@gmail.com>  Tue, 10 Jan 2023 15:02:44 +0545
+
 dtkgui (5.6.3-1) lunar; urgency=medium
 
   * New upstream release.
