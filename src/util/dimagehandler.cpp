@@ -33,10 +33,14 @@ struct SupportFormats
 };
 
 Q_GLOBAL_STATIC(SupportFormats, SupportFormatsInstance)
+#ifndef DTK_DISABLE_EX_IMAGE_FORMAT
 Q_GLOBAL_STATIC(DLibFreeImage, DLibFreeImageInstance)
+Q_GLOBAL_STATIC(DLibRaw, DLibRawInstance)
+#endif
 
 SupportFormats::SupportFormats()
 {
+#ifndef DTK_DISABLE_EX_IMAGE_FORMAT
     // LibFreeImage support formats
     freeImageFormats["BMP"] = FIF_BMP;
     freeImageFormats["ICO"] = FIF_ICO;
@@ -76,10 +80,10 @@ SupportFormats::SupportFormats()
     // The G3 fax format plugin is deliberately disabled in the Fedora build of
     // FreeImage as it requires that FreeImage uses a private copy of libtiff
     // which is a no no because of security reasons.
-#if 0
+#    if 0
     freeImageFormats["FAX"] = FIF_FAXG3;
     freeImageFormats["G3"] = FIF_FAXG3;
-#endif
+#    endif
     freeImageFormats["SGI"] = FIF_SGI;
     freeImageFormats["EXR"] = FIF_EXR;
     freeImageFormats["PCT"] = FIF_PICT;
@@ -93,21 +97,29 @@ SupportFormats::SupportFormats()
     movieFormats["WEBP"] = FIF_WEBP;
 
     // LibRaw support images
-    libRawFormats << "DNG"
-                  << "RAF"
-                  << "CR2"
-                  << "ORF"
-                  << "RAW"
+    libRawFormats << "CR2"
+                  << "CRW"
+                  << "DCR"
+                  << "KDC"
                   << "MRW"
                   << "NEF"
-                  << "TIF"
-                  << "TIFF";
+                  << "ORF"
+                  << "PEF"
+                  << "RAF"
+                  << "SRF"
+                  << "DNG"
+                  << "RAW";
+#endif
 
     // For some formats, Qt will support after loading image plugins.
     QList<QByteArray> qtReadableFormats = QImageReader::supportedImageFormats();
     for (QByteArray &format : qtReadableFormats) {
         qtSupportFormats << QString::fromUtf8(format).toUpper();
     }
+    // Qt support formats internal.
+    qtSupportFormats << "PNM"
+                     << "MEF"
+                     << "PXM";
 
     saveableFormats << "BMP"
                     << "JPG"
@@ -135,8 +147,13 @@ SupportFormats::SupportFormats()
                        << "BMP";
 
     QSet<QString> formats;
+
+#ifndef DTK_DISABLE_EX_IMAGE_FORMAT
     // Check libFreeImage load succeeded.
     if (DLibFreeImageInstance()->isValid()) {
+        // Use FreeImage load .pcx image.
+        qtSupportFormats.removeAll("PCX");
+
         for (auto itr = freeImageFormats.begin(); itr != freeImageFormats.end(); ++itr) {
             formats.insert(itr.key());
         }
@@ -146,7 +163,13 @@ SupportFormats::SupportFormats()
         }
     }
 
-    // TODO: Add libRaw support formats.
+    // Add libRaw support formats.
+    if (DLibRawInstance()->isValid()) {
+        for (const QString &format : libRawFormats) {
+            formats.insert(format);
+        }
+    }
+#endif
 
     if (formats.isEmpty()) {
         supportFormats = qtSupportFormats;
@@ -163,7 +186,11 @@ SupportFormats::SupportFormats()
 DCORE_USE_NAMESPACE
 DGUI_BEGIN_NAMESPACE
 
+#ifndef DTK_DISABLE_EX_IMAGE_FORMAT
 QString detectImageFormatInternal(const QString &fileName, FREE_IMAGE_FORMAT &format);
+#else
+QString detectImageFormatInternal(const QString &fileName);
+#endif
 
 class DImageHandlerPrivate : public DObjectPrivate
 {
@@ -174,10 +201,13 @@ public:
 
     explicit DImageHandlerPrivate(DImageHandler *qq);
 
-    bool detectFileReadable(const QString &detectFileName) const;
-    bool detectFileWriteable(const QString &detectFileName) const;
+    bool formatReadable(const QString &fileFormat) const;
+    bool formatWriteable(const QString &fileFormat) const;
 
     bool loadStaticImageFromFile(const QString &fileName, QImage &image);
+#ifndef DTK_DISABLE_EX_IMAGE_FORMAT
+    bool loadImageWithFreeImage(const QString &fileName, QImage &image, FREE_IMAGE_FORMAT fifForamt, QString fileFormat);
+#endif
     bool rotateImageFile(const QString &fileName, int angle);
     bool rotateImage(QImage &image, int angle);
 
@@ -186,7 +216,7 @@ public:
     QString fileName;
     ImageOptions options;
     QImage cachedImage;
-
+    QString cachedFormat;
     QString lastError;
 };
 Q_DECLARE_OPERATORS_FOR_FLAGS(DImageHandlerPrivate::ImageOptions)
@@ -196,44 +226,38 @@ DImageHandlerPrivate::DImageHandlerPrivate(DImageHandler *qq)
 {
 }
 
-bool DImageHandlerPrivate::detectFileReadable(const QString &detectFileName) const
+bool DImageHandlerPrivate::formatReadable(const QString &fileFormat) const
 {
-    if (detectFileName.isEmpty()) {
+    if (fileFormat.isEmpty()) {
         return false;
     }
 
+#ifndef DTK_DISABLE_EX_IMAGE_FORMAT
     if (DLibFreeImageInstance()->isValid()) {
-        FREE_IMAGE_FORMAT format = DLibFreeImageInstance()->FreeImage_GetFIFFromFilename(detectFileName.toUtf8().data());
-        if (FIF_UNKNOWN != format) {
-            QString formatString = SupportFormatsInstance()->freeImageFormats.key(format);
-            if (SupportFormatsInstance()->supportFormats.contains(formatString)) {
-                return true;
-            }
+        if (SupportFormatsInstance()->supportFormats.contains(fileFormat)) {
+            return true;
         }
     }
+#endif
 
-    QString fileSuffix = QFileInfo(detectFileName).suffix().toUpper();
-    return SupportFormatsInstance()->supportFormats.contains(fileSuffix);
+    return SupportFormatsInstance()->supportFormats.contains(fileFormat);
 }
 
-bool DImageHandlerPrivate::detectFileWriteable(const QString &detectFileName) const
+bool DImageHandlerPrivate::formatWriteable(const QString &fileFormat) const
 {
-    if (detectFileName.isEmpty()) {
+    if (fileFormat.isEmpty()) {
         return false;
     }
 
+#ifndef DTK_DISABLE_EX_IMAGE_FORMAT
     if (DLibFreeImageInstance()->isValid()) {
-        FREE_IMAGE_FORMAT format = DLibFreeImageInstance()->FreeImage_GetFIFFromFilename(detectFileName.toUtf8().data());
-        if (FIF_UNKNOWN != format) {
-            QString formatString = SupportFormatsInstance()->freeImageFormats.key(format);
-            if (SupportFormatsInstance()->saveableFormats.contains(formatString)) {
-                return true;
-            }
+        if (SupportFormatsInstance()->saveableFormats.contains(fileFormat)) {
+            return true;
         }
     }
+#endif
 
-    QString fileSuffix = QFileInfo(detectFileName).suffix().toUpper();
-    return SupportFormatsInstance()->saveableFormats.contains(fileSuffix);
+    return SupportFormatsInstance()->saveableFormats.contains(fileFormat);
 }
 
 bool DImageHandlerPrivate::loadStaticImageFromFile(const QString &fileName, QImage &image)
@@ -246,6 +270,7 @@ bool DImageHandlerPrivate::loadStaticImageFromFile(const QString &fileName, QIma
         return false;
     }
 
+#ifndef DTK_DISABLE_EX_IMAGE_FORMAT
     FREE_IMAGE_FORMAT fifFormat = FIF_UNKNOWN;
     QString fileFormat = detectImageFormatInternal(fileName, fifFormat);
     if (DLibFreeImageInstance()->isValid()) {
@@ -255,9 +280,12 @@ bool DImageHandlerPrivate::loadStaticImageFromFile(const QString &fileName, QIma
     }
 
     // For some formats, need use Qt image reader load, to aviod some errors on different hardware architectures.
-    bool usingQImage = (FIF_RAW == fifFormat) || ((FIF_PICT == fifFormat) && ("PCT" != fileFormat));
+    bool usingQImage = ((FIF_PICT == fifFormat) && ("PCT" != fileFormat));
 
     if (usingQImage || SupportFormatsInstance()->qtSupportFormats.contains(fileFormat)) {
+#else
+    QString fileFormat = detectImageFormatInternal(fileName);
+#endif
         QImageReader reader(fileName);
         reader.setAutoTransform(true);
 
@@ -271,46 +299,77 @@ bool DImageHandlerPrivate::loadStaticImageFromFile(const QString &fileName, QIma
                 image = reader.read();
                 if (!image.isNull()) {
                     return true;
+
+#ifndef DTK_DISABLE_EX_IMAGE_FORMAT
+                } else if (DLibFreeImageInstance()->isValid() &&
+                           DLibFreeImageInstance()->FreeImage_FIFSupportsReading(fifFormat)) {
+                    // Try load with FreeImage.
+                    return loadImageWithFreeImage(fileName, image, fifFormat, fileFormat);
+#endif
                 } else {
-                    lastError = QString("Load image by qt failed, use format: %1").arg(fileFormat);
+                    lastError = QString("Load image by qt failed, %1, use format: %2").arg(reader.errorString()).arg(fileFormat);
                     return false;
                 }
             }
         }
+
+#ifndef DTK_DISABLE_EX_IMAGE_FORMAT
+    } else if (SupportFormatsInstance()->libRawFormats.contains(fileFormat) && DLibRawInstance()->isValid()) {
+        // Use libRaw load.
+        image = DLibRawInstance()->loadImage(fileName, lastError);
+        return !image.isNull();
     } else if (DLibFreeImageInstance()->isValid()) {
-        if (FIF_UNKNOWN != fifFormat || SupportFormatsInstance()->freeImageFormats.contains(fileFormat)) {
-            if (FIF_UNKNOWN == fifFormat) {
-                fifFormat = FREE_IMAGE_FORMAT(SupportFormatsInstance()->freeImageFormats.value(fileFormat, FIF_UNKNOWN));
-            }
+        // Use FreeImage load.
+        return loadImageWithFreeImage(fileName, image, fifFormat, fileFormat);
+    }
+#endif
 
-            static const int MAX_JP2_SUPPORT_SIZE = 40960000;
-            if (FIF_JP2 == fifFormat && fileInfo.size() > MAX_JP2_SUPPORT_SIZE) {
-                lastError = QString("Load image failed, JP2 image size to big, format: %1").arg(fileFormat);
-                return false;
-            }
+    lastError = QString("Unsupport image format: %1").arg(fileFormat);
+    return false;
+}
 
-            // Using FreeImage load.
-            FIBITMAP *dib = DLibFreeImageInstance()->FreeImage_Load(fifFormat, fileName.toUtf8().data(), 0);
-            if (!dib) {
-                lastError = QString("Load image failed, format: %1").arg(fileFormat);
-                return false;
-            }
+#ifndef DTK_DISABLE_EX_IMAGE_FORMAT
+bool DImageHandlerPrivate::loadImageWithFreeImage(const QString &fileName,
+                                                  QImage &image,
+                                                  FREE_IMAGE_FORMAT fifFormat,
+                                                  QString fileFormat)
+{
+    if (!DLibFreeImageInstance()->isValid()) {
+        return false;
+    }
 
-            image = DLibFreeImageInstance()->FIBITMAPToQImage(dib);
-            if (image.isNull()) {
-                DLibFreeImageInstance()->FreeImage_Unload(dib);
-                lastError = QString("Convert to QImage failed: %1").arg(fileFormat);
-                return false;
-            }
-
-            DLibFreeImageInstance()->FreeImage_Unload(dib);
-            return true;
+    if (FIF_UNKNOWN != fifFormat || SupportFormatsInstance()->freeImageFormats.contains(fileFormat)) {
+        if (FIF_UNKNOWN == fifFormat) {
+            fifFormat = FREE_IMAGE_FORMAT(SupportFormatsInstance()->freeImageFormats.value(fileFormat, FIF_UNKNOWN));
         }
+
+        static const int MAX_JP2_SUPPORT_SIZE = 40960000;
+        if (FIF_JP2 == fifFormat && QFileInfo(fileName).size() > MAX_JP2_SUPPORT_SIZE) {
+            lastError = QString("Load image failed, JP2 image size to big, format: %1").arg(fileFormat);
+            return false;
+        }
+
+        FIBITMAP *dib = DLibFreeImageInstance()->FreeImage_Load(fifFormat, fileName.toUtf8().data(), 0);
+        if (!dib) {
+            lastError = QString("Load image failed, format: %1").arg(fileFormat);
+            return false;
+        }
+
+        image = DLibFreeImageInstance()->FIBITMAPToQImage(dib);
+        if (image.isNull()) {
+            DLibFreeImageInstance()->FreeImage_Unload(dib);
+            lastError = QString("Convert to QImage failed: %1").arg(fileFormat);
+            return false;
+        }
+
+        DLibFreeImageInstance()->FreeImage_Unload(dib);
+        return true;
     }
 
     lastError = QString("Unsupport image format: %1").arg(fileFormat);
     return false;
 }
+#endif
 
 bool DImageHandlerPrivate::rotateImageFile(const QString &fileName, int angle)
 {
@@ -325,12 +384,14 @@ bool DImageHandlerPrivate::rotateImageFile(const QString &fileName, int angle)
     if (SupportFormatsInstance()->qtRotatableFormats.contains(format)) {
         QImage image(fileName);
 
+#ifndef DTK_DISABLE_EX_IMAGE_FORMAT
         // Some image formats support use EXIF info store orientation info.
         if (DLibFreeImageInstance()->isValid()) {
             // Using libFreeImage to get EXIF information.
             ExifImageOrientation orientation = DLibFreeImageInstance()->imageOrientation(fileName);
             adjustImageToRealOrientation(image, orientation);
         }
+#endif
 
         if (rotateImage(image, angle)) {
             image.save(fileName, format.toLatin1().data(), SAVE_QUAITY_VALUE);
@@ -339,9 +400,11 @@ bool DImageHandlerPrivate::rotateImageFile(const QString &fileName, int angle)
         return false;
     }
 
+#ifndef DTK_DISABLE_EX_IMAGE_FORMAT
     if (DLibFreeImageInstance()->isValid()) {
         return DLibFreeImageInstance()->rotateImageFile(fileName, angle, lastError);
     }
+#endif
 
     lastError = QString("Unsupported format: %1").arg(format);
     return false;
@@ -423,8 +486,9 @@ void DImageHandler::setFileName(const QString &fileName)
     clearCache();
 
     if (!d->fileName.isEmpty()) {
-        d->options.setFlag(DImageHandlerPrivate::Readable, d->detectFileReadable(d->fileName));
-        if (d->detectFileWriteable(d->fileName)) {
+        d->cachedFormat = detectImageFormat(fileName);
+        d->options.setFlag(DImageHandlerPrivate::Readable, d->formatReadable(d->cachedFormat));
+        if (d->formatWriteable(d->cachedFormat)) {
             d->options.setFlag(DImageHandlerPrivate::Wirteable);
             d->options.setFlag(DImageHandlerPrivate::Rotatable);
         }
@@ -464,6 +528,12 @@ QImage DImageHandler::thumbnail(const QSize &size, Qt::AspectRatioMode mode)
     return d->cachedImage.scaled(size, mode);
 }
 
+QString DImageHandler::imageFormat() const
+{
+    D_DC(DImageHandler);
+    return d->cachedFormat;
+}
+
 QSize DImageHandler::imageSize()
 {
     D_D(DImageHandler);
@@ -481,9 +551,12 @@ QHash<QString, QString> DImageHandler::findAllMetaData()
         return {};
     }
 
+#ifndef DTK_DISABLE_EX_IMAGE_FORMAT
     if (DLibFreeImageInstance()->isValid()) {
         return DLibFreeImageInstance()->findAllMetaData(d->fileName);
     }
+#endif
+
     return {};
 }
 
@@ -507,11 +580,15 @@ bool DImageHandler::saveImage(const QImage &image, const QString &fileName, cons
     QString realFormat = format.toUpper();
     if (realFormat.isEmpty()) {
         // Detect save file format.
+#ifndef DTK_DISABLE_EX_IMAGE_FORMAT
         FREE_IMAGE_FORMAT fifFormat = FIF_UNKNOWN;
         realFormat = detectImageFormatInternal(fileName, fifFormat);
         if (FIF_UNKNOWN != fifFormat) {
             realFormat = SupportFormatsInstance()->freeImageFormats.key(fifFormat);
         }
+#else
+        realFormat = detectImageFormatInternal(fileName);
+#endif
     }
 
     if (!SupportFormatsInstance()->saveableFormats.contains(realFormat.toUpper())) {
@@ -560,6 +637,7 @@ void DImageHandler::clearCache()
 {
     D_D(DImageHandler);
     d->cachedImage = QImage();
+    d->cachedFormat.clear();
     d->lastError.clear();
 }
 
@@ -573,24 +651,35 @@ QStringList DImageHandler::supportFormats()
     return SupportFormatsInstance()->supportFormats;
 }
 
+#ifndef DTK_DISABLE_EX_IMAGE_FORMAT
 QString detectImageFormatInternal(const QString &fileName, FREE_IMAGE_FORMAT &format)
+#else
+QString detectImageFormatInternal(const QString &fileName)
+#endif
 {
     QFileInfo info(fileName);
     QString fileSuffix = info.suffix().toUpper();
     QByteArray tempPath = fileName.toUtf8();
-    format = FIF_UNKNOWN;
 
+#ifndef DTK_DISABLE_EX_IMAGE_FORMAT
+    format = FIF_UNKNOWN;
+    
     // Check load lib FreeImage succeeded.
     if (DLibFreeImageInstance()->isValid()) {
         format = DLibFreeImageInstance()->FreeImage_GetFileType(tempPath.data(), 0);
         if (FIF_UNKNOWN != format && format != SupportFormatsInstance()->freeImageFormats[fileSuffix]) {
-            fileSuffix = SupportFormatsInstance()->freeImageFormats.key(format);
+            // Some format don't load with FreeImage.
+            QString fifFileFormat = SupportFormatsInstance()->freeImageFormats.key(format);
+            if (!fifFileFormat.isEmpty()) {
+                fileSuffix = fifFileFormat;
+            }
         }
 
         if (format == FIF_TIFF) {
             fileSuffix = "TIFF";
         }
-    } 
+    }
+#endif
 
     if (fileSuffix.isEmpty()) {
         QFile file(fileName);
@@ -684,8 +773,12 @@ QString detectImageFormatInternal(const QString &fileName, FREE_IMAGE_FORMAT &fo
 
 QString DImageHandler::detectImageFormat(const QString &fileName)
 {
+#ifndef DTK_DISABLE_EX_IMAGE_FORMAT
     FREE_IMAGE_FORMAT format = FIF_UNKNOWN;
     return detectImageFormatInternal(fileName, format);
+#else
+    return detectImageFormatInternal(fileName);
+#endif
 }
 
 QImage DImageHandler::oldColorFilter(const QImage &img)
@@ -897,34 +990,34 @@ QImage DImageHandler::bilateralFilter(const QImage &img, double spatialDecay, do
 #pragma omp parallel for
     for (int k2 = 0; k2 < height; ++k2) {
         int startIndex = k2 * width;
-        double mu = 0.0;
+        double mu2 = 0.0;
 
         for (int k = startIndex + 1, K = startIndex + width; k < K; ++k) {
             int div0Red = fabs(pRed[k] - pRed[k - 1]);
-            mu = exptable[div0Red];
-            pRed[k] = pRed[k - 1] * mu + pRed[k] * (1.0 - mu);
+            mu2 = exptable[div0Red];
+            pRed[k] = pRed[k - 1] * mu2 + pRed[k] * (1.0 - mu2);
 
             int div0Green = fabs(pGreen[k] - pGreen[k - 1]);
-            mu = exptable[div0Green];
-            pGreen[k] = pGreen[k - 1] * mu + pGreen[k] * (1.0 - mu);
+            mu2 = exptable[div0Green];
+            pGreen[k] = pGreen[k - 1] * mu2 + pGreen[k] * (1.0 - mu2);
 
             int div0Blue = fabs(pBlue[k] - pBlue[k - 1]);
-            mu = exptable[div0Blue];
-            pBlue[k] = pBlue[k - 1] * mu + pBlue[k] * (1.0 - mu);
+            mu2 = exptable[div0Blue];
+            pBlue[k] = pBlue[k - 1] * mu2 + pBlue[k] * (1.0 - mu2);
         }
 
         for (int k = startIndex + width - 2; startIndex <= k; --k) {
             int div0Red = fabs(rRed[k] - rRed[k + 1]);
-            double mu = exptable[div0Red];
-            rRed[k] = rRed[k + 1] * mu + rRed[k] * (1.0 - mu);
+            mu2 = exptable[div0Red];
+            rRed[k] = rRed[k + 1] * mu2 + rRed[k] * (1.0 - mu2);
 
             int div0Green = fabs(rGreen[k] - rGreen[k + 1]);
-            mu = exptable[div0Green];
-            rGreen[k] = rGreen[k + 1] * mu + rGreen[k] * (1.0 - mu);
+            mu2 = exptable[div0Green];
+            rGreen[k] = rGreen[k + 1] * mu2 + rGreen[k] * (1.0 - mu2);
 
             int div0Blue = fabs(rBlue[k] - rBlue[k + 1]);
-            mu = exptable[div0Blue];
-            rBlue[k] = rBlue[k + 1] * mu + rBlue[k] * (1.0 - mu);
+            mu2 = exptable[div0Blue];
+            rBlue[k] = rBlue[k + 1] * mu2 + rBlue[k] * (1.0 - mu2);
         }
 
         for (int k = startIndex, K = startIndex + width; k < K; k++) {
@@ -960,34 +1053,34 @@ QImage DImageHandler::bilateralFilter(const QImage &img, double spatialDecay, do
 #pragma omp parallel for
     for (int k1 = 0; k1 < width; ++k1) {
         int startIndex = k1 * height;
-        double mu = 0.0;
+        double mu1 = 0.0;
 
         for (int k = startIndex + 1, K = startIndex + height; k < K; ++k) {
             int div0Red = fabs(pRed[k] - pRed[k - 1]);
-            mu = exptable[div0Red];
-            pRed[k] = pRed[k - 1] * mu + pRed[k] * (1.0 - mu);
+            mu1 = exptable[div0Red];
+            pRed[k] = pRed[k - 1] * mu1 + pRed[k] * (1.0 - mu1);
 
             int div0Green = fabs(pGreen[k] - pGreen[k - 1]);
-            mu = exptable[div0Green];
-            pGreen[k] = pGreen[k - 1] * mu + pGreen[k] * (1.0 - mu);
+            mu1 = exptable[div0Green];
+            pGreen[k] = pGreen[k - 1] * mu1 + pGreen[k] * (1.0 - mu1);
 
             int div0Blue = fabs(pBlue[k] - pBlue[k - 1]);
-            mu = exptable[div0Blue];
-            pBlue[k] = pBlue[k - 1] * mu + pBlue[k] * (1.0 - mu);
+            mu1 = exptable[div0Blue];
+            pBlue[k] = pBlue[k - 1] * mu1 + pBlue[k] * (1.0 - mu1);
         }
 
         for (int k = startIndex + height - 2; startIndex <= k; --k) {
             int div0Red = fabs(rRed[k] - rRed[k + 1]);
-            mu = exptable[div0Red];
-            rRed[k] = rRed[k + 1] * mu + rRed[k] * (1.0 - mu);
+            mu1 = exptable[div0Red];
+            rRed[k] = rRed[k + 1] * mu1 + rRed[k] * (1.0 - mu1);
 
             int div0Green = fabs(rGreen[k] - rGreen[k + 1]);
-            mu = exptable[div0Green];
-            rGreen[k] = rGreen[k + 1] * mu + rGreen[k] * (1.0 - mu);
+            mu1 = exptable[div0Green];
+            rGreen[k] = rGreen[k + 1] * mu1 + rGreen[k] * (1.0 - mu1);
 
             int div0Blue = fabs(rBlue[k] - rBlue[k + 1]);
-            mu = exptable[div0Blue];
-            rBlue[k] = rBlue[k + 1] * mu + rBlue[k] * (1.0 - mu);
+            mu1 = exptable[div0Blue];
+            rBlue[k] = rBlue[k + 1] * mu1 + rBlue[k] * (1.0 - mu1);
         }
     }
 
@@ -1073,7 +1166,7 @@ QImage DImageHandler::contourExtraction(const QImage &img)
     for (int y = 1; y < height - 1; y++) {
         for (int x = 1; x < width - 1; x++) {
             int pixel[8];
-            memset(pixel, 0, 8);
+            memset(pixel, 0, 8 * sizeof(int));
             int lineNum_24 = y * nRowBytes;
             if (binrgb[lineNum_24 + x * 3] == 0) {
                 rgb[lineNum_24 + x * 3] = 0;
@@ -1233,7 +1326,6 @@ QImage DImageHandler::sobelEdgeDetector(const QImage &img)
     Gy[7] = 2.0;
     Gy[8] = 1.0;
 
-    QRgb pixel;
     QImage grayImage = grayScale(img);
     int height = grayImage.height();
     int width = grayImage.width();
@@ -1256,7 +1348,6 @@ QImage DImageHandler::sobelEdgeDetector(const QImage &img)
             for (int k = 0; k < 3; k++) {
                 for (int p = 0; p < 3; p++) {
                     if ((x + 1 + 1 - k < width) && (y + 1 + 1 - p < height)) {
-                        pixel = grayImage.pixel(x + 1 + 1 - k, y + 1 + 1 - p);
                         int lineNum_24 = (y + 1 + 1 - p) * nRowBytes;
                         value_gx += Gx[p * 3 + k] * rgbImg[lineNum_24 + (x + 1 + 1 - k) * 3];
                         value_gy += Gy[p * 3 + k] * rgbImg[lineNum_24 + (x + 1 + 1 - k) * 3];
@@ -1389,12 +1480,13 @@ QImage DImageHandler::changeStauration(const QImage &img, int saturation)
                 continue;
             }
             int L = value >> 1;
-            int S = L < 128 ? (delta << 7) / value : (delta << 7) / (510 - value);
             if (k >= 0) {
+                int S = L < 128 ? (delta << 7) / value : (delta << 7) / (510 - value);
                 alpha = k + S >= 128 ? S : 128 - k;
                 alpha = 128 * 128 / alpha - 128;
-            } else
+            } else {
                 alpha = k;
+            }
             r = r + ((r - L) * alpha >> 7);
             g = g + ((g - L) * alpha >> 7);
             b = b + ((b - L) * alpha >> 7);

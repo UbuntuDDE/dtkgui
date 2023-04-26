@@ -6,8 +6,10 @@ pkgdesc='Deepin Toolkit, gui module for DDE look and feel'
 arch=('x86_64' 'aarch64')
 url="https://github.com/linuxdeepin/dtkgui"
 license=('LGPL3')
-depends=('dtkcore-git' 'librsvg' 'libqtxdg')
-makedepends=('git' 'qt5-tools' 'dtkcommon-git' 'dtkcore-git' 'librsvg' 'freeimage' 'gtest' 'gmock' 'libqtxdg' 'ninja' 'cmake' 'doxygen')
+depends=('dtkcore-git' 'qt5-svg' 'libqtxdg' 'freeimage')
+# INFO: you can disable freeimage not to support RAW images
+# Then set DTK_DISABLE_EX_IMAGE_FORMAT=OFF
+makedepends=('git' 'qt5-tools' 'dtkcommon-git' 'dtkcore-git' 'librsvg' 'gtest' 'gmock' 'libqtxdg' 'ninja' 'cmake' 'doxygen')
 conflicts=('dtkgui')
 provides=('dtkgui')
 groups=('deepin-git')
@@ -16,19 +18,21 @@ sha512sums=('SKIP')
 
 
 build() {
-  cd $deepin_source_name
-  cmake -GNinja \
-    -DNOTPACKAGE=OFF \
-    -DMKSPECS_INSTALL_DIR=/usr/lib/qt/mkspecs/modules/ \
+    cd $deepin_source_name
+    cmake -GNinja \
+    -DMKSPECS_INSTALL_DIR=lib/qt/mkspecs/modules/ \
     -DBUILD_DOCS=ON \
-    -DQCH_INSTALL_DESTINATION=/usr/share/doc/qt \
-    -DCMAKE_INSTALL_LIBDIR=/usr/lib \
+    -DDTK_DISABLE_LIBRSVG=ON \
+    -DQCH_INSTALL_DESTINATION=share/doc/qt \
+    -DCMAKE_INSTALL_LIBDIR=lib \
     -DCMAKE_INSTALL_PREFIX=/usr \
     -DCMAKE_BUILD_TYPE=Release
-  ninja
+    ninja
+    # INFO: Another cmake option is DTK_DISABLE_EX_IMAGE_FORMAT
+    # If you not want to support RAW images, set it to off
 }
 
 package() {
-  cd $deepin_source_name
-  DESTDIR="$pkgdir" ninja install
+    cd $deepin_source_name
+    DESTDIR="$pkgdir" ninja install
 }
